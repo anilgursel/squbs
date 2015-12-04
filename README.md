@@ -1,5 +1,7 @@
 ![image](docs/img/squbs-logo-transparent.png)
 
+![image](https://img.shields.io/badge/0.8.0-SNAPSHOT-blue.svg?style=plastic)
+
 [![Join the chat at https://gitter.im/paypal/squbs](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/paypal/squbs?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 [![Build Status](https://travis-ci.org/paypal/squbs.svg?branch=master)](https://travis-ci.org/paypal/squbs)
 [![Codacy Badge](https://api.codacy.com/project/badge/57368c396cb649c590e4ba678675e55c)](https://www.codacy.com/app/akara-sucharitakul/squbs)
