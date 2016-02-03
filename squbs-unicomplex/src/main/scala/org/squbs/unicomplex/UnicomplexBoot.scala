@@ -313,8 +313,8 @@ object UnicomplexBoot extends LazyLogging {
 
     def startServiceRoute(clazz: Class[_], proxyName : Option[String], webContext: String, listeners: Seq[String]) = {
       try {
-        val routeClass = clazz asSubclass classOf[RouteDefinition]
-        val props = Props(classOf[RouteActor], webContext, routeClass)
+        val (routeClass, routeActor) = Try { clazz asSubclass classOf[RouteDefinition] } map {(_, classOf[RouteActor])} getOrElse {(clazz asSubclass classOf[org.squbs.unicomplex.streaming.RouteDefinition], classOf[streaming.RouteActor] )}
+        val props = Props(routeActor, webContext, routeClass)
         val className = clazz.getSimpleName
         val actorName =
           if (webContext.length > 0) s"${webContext.replace('/', '_')}-$className-route"
