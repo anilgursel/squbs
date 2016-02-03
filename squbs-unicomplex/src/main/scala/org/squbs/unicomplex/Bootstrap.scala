@@ -22,6 +22,17 @@ import org.squbs.lifecycle.GracefulStop
 
 object Bootstrap extends App {
 
+  println(
+    """
+      |                 _
+      |                | |
+      | ___  __ _ _   _| |__  ___
+      |/ __|/ _` | | | | '_ \/ __|
+      |\__ \ (_| | |_| | |_) \__ \
+      ||___/\__, |\__,_|_.__/|___/
+      |        | |
+      |        |_|
+    """.stripMargin)
   println("Booting unicomplex")
 
   // Note, the config directories may change during extension init. It is important to re-read the full config
