@@ -31,8 +31,10 @@ import akka.http.scaladsl.{Http, HttpsContext}
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
 import akka.stream.ActorMaterializer
 import akka.stream.io.ClientAuth.{Need, Want}
+import akka.stream.scaladsl.Sink
 import com.typesafe.config.Config
 import org.squbs.unicomplex._
+import org.squbs.unicomplex.streaming.StatsSupport.StatsHolder
 
 import scala.concurrent.{Future, ExecutionContext}
 import scala.util.Failure
@@ -64,18 +66,29 @@ class ServiceRegistry(val log: LoggingAdapter) extends ServiceRegistryBase[Path]
     import context.dispatcher
 
     val uniSelf = context.self
-    (sslContext match {
+    val serverFlow = (sslContext match {
       case Some(sslCtx) =>
         val httpsCtx = Some(HttpsContext(sslCtx, clientAuth = Some { if(needClientAuth) Need else Want }))
-        Http().bindAndHandle(Handler(listenerRoutes(name)).flow, interface, port, httpsContext = httpsCtx )
+        Http().bind(interface, port, httpsContext = httpsCtx )
 
-      case None => Http().bindAndHandle(Handler(listenerRoutes(name)).flow, interface, port)
-    }) pipeTo uniSelf
+      case None => Http().bind(interface, port)
+    })
 
+
+    val statsHolder = new StatsHolder
+
+    serverFlow.to(Sink.foreach { conn =>
+
+      conn.flow.transform(() => statsHolder.watchRequests())
+        .join(Handler(listenerRoutes(name)).flow.transform(() => statsHolder.watchResponses()))
+        .run()
+
+    }).run() pipeTo uniSelf
 
     {
       case sb: ServerBinding =>
-        // TODO JMX registration..
+        import org.squbs.unicomplex.JMX._
+        JMX.register(new ServerStats(name, statsHolder), prefix + serverStats + name)
         serverBindigs = serverBindigs + (name -> Some(sb))
         notifySender ! Ack
         uniSelf ! HttpBindSuccess
