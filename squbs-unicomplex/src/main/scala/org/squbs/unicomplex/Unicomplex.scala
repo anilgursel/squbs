@@ -21,7 +21,6 @@ import java.io.{PrintWriter, StringWriter}
 import java.util
 import java.util.Date
 import java.util.concurrent.ConcurrentHashMap
-import javax.imageio.spi.ServiceRegistry
 
 import akka.actor.SupervisorStrategy._
 import akka.actor.{Extension => AkkaExtension, _}
@@ -380,9 +379,9 @@ class Unicomplex extends Actor with Stash with ActorLogging {
 
     case StartListener(name, conf) => // Sent from Bootstrap to start the web service infrastructure.
 
-      val startupBehaviour = serviceRegistry.startListener(name, conf, notifySender = sender())
+      val startupBehavior = serviceRegistry.startListener(name, conf, notifySender = sender())
 
-      context.become(startupBehaviour orElse {
+      context.become(startupBehavior orElse {
         case HttpBindSuccess =>
           if (serviceRegistry.isListenersBound) updateSystemState(checkInitState())
           context.unbecome()

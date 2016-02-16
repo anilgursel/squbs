@@ -312,17 +312,25 @@ object UnicomplexBoot extends LazyLogging {
     }
 
     def startServiceRoute(clazz: Class[_], proxyName : Option[String], webContext: String, listeners: Seq[String]) = {
-      try {
-        val (routeClass, routeActor) = Try { clazz asSubclass classOf[RouteDefinition] } map {(_, classOf[RouteActor])} getOrElse {(clazz asSubclass classOf[org.squbs.unicomplex.streaming.RouteDefinition], classOf[streaming.RouteActor] )}
-        val props = Props(routeActor, webContext, routeClass)
-        val className = clazz.getSimpleName
-        val actorName =
-          if (webContext.length > 0) s"${webContext.replace('/', '_')}-$className-route"
-          else s"root-$className-route"
-        cubeSupervisor ! StartCubeService(webContext, listeners, props, actorName, proxyName, initRequired = true)
-        Some((fullName, name, version, clazz))
-      } catch {
-        case e: ClassCastException => None
+
+        Try {
+          // Try non-streaming RouteDefinition first.
+          (clazz asSubclass classOf[RouteDefinition], classOf[RouteActor])
+        } orElse {
+          // Try the streaming (Akka-Http) RouteDefinition.
+          Try {
+            (clazz asSubclass classOf[streaming.RouteDefinition], classOf[streaming.RouteActor])
+          }
+        } match {
+          case Success((routeClass, routeActor)) =>
+            val props = Props(routeActor, webContext, routeClass)
+            val className = clazz.getSimpleName
+            val actorName =
+              if (webContext.length > 0) s"${webContext.replace('/', '_')}-$className-route"
+              else s"root-$className-route"
+            cubeSupervisor ! StartCubeService(webContext, listeners, props, actorName, proxyName, initRequired = true)
+            Some((fullName, name, version, clazz))
+          case _ => None
       }
     }
 

@@ -22,7 +22,7 @@ import org.squbs.unicomplex.streaming.StatsSupport.StatsHolder
 
 class ServerStats(name: String, statsHolder: StatsHolder) extends ServerStatsMXBean {
 
-  import spray.util._
+  val df = new java.text.SimpleDateFormat("HH:mm:ss:SSS")
 
   override def getListenerName: String = name
 
@@ -32,7 +32,7 @@ class ServerStats(name: String, statsHolder: StatsHolder) extends ServerStatsMXB
 
   override def getOpenRequests: Long = status.map(_.openRequests) getOrElse -1
 
-  override def getUptime: String = status.map(_.uptime.formatHMS) getOrElse "00:00:00.000"
+  override def getUptime: String = status.map(s => df.format(s.uptime.toMillis)) getOrElse "00:00:00.000"
 
   override def getMaxOpenRequests: Long = status.map(_.maxOpenRequests) getOrElse -1
 
