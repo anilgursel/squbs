@@ -175,6 +175,7 @@ class Unicomplex extends Actor with Stash with ActorLogging {
 
   private var servicesStarted= false
 
+  // TODO FIXME.  Always returning true
   import ConfigUtil._
   val isStreaming = context.system.settings.config getOptionalBoolean("squbs.experimental-mode-on") getOrElse false
 

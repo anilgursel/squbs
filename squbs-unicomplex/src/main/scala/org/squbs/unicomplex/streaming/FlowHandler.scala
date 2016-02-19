@@ -20,7 +20,7 @@ import akka.actor.ActorSystem
 import akka.agent.Agent
 import akka.http.scaladsl.model.Uri.Path
 import akka.http.scaladsl.model.headers.RawHeader
-import akka.http.scaladsl.model.{HttpHeader, HttpResponse, HttpRequest}
+import akka.http.scaladsl.model.{StatusCodes, HttpHeader, HttpResponse, HttpRequest}
 import akka.stream.FlowShape
 import akka.stream.scaladsl._
 import akka.util.Timeout
@@ -86,7 +86,8 @@ class Handler(routes: Agent[Seq[(Path, ActorWrapper)]])(implicit system: ActorSy
         ch => ch.transformer.get.apply(ch.ctx.request).map(resp => ch.ctx.copy(response = Option(resp)))
       }
 
-      val respFlow = b.add(Flow[RequestContext].map(_.response.getOrElse(HttpResponse(404, entity = "Unknown resource from Unicomplex Experimental!"))))
+      val respFlow = b.add(Flow[RequestContext].map(
+        _.response.getOrElse(HttpResponse(StatusCodes.NotFound, entity = StatusCodes.NotFound.defaultMessage))))
 
       object RequestContextOrdering extends Ordering[RequestContext] {
         def compare(a:RequestContext, b:RequestContext) = b.id compare a.id
