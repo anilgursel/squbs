@@ -76,11 +76,12 @@ class ServiceRegistry(val log: LoggingAdapter) extends ServiceRegistryBase[Path]
 
 
     val statsHolder = new StatsHolder
+    val handler = Handler(listenerRoutes(name))
 
     serverFlow.to(Sink.foreach { conn =>
 
       conn.flow.transform(() => statsHolder.watchRequests())
-        .join(Handler(listenerRoutes(name)).flow.transform(() => statsHolder.watchResponses()))
+        .join(handler.flow.transform(() => statsHolder.watchResponses()))
         .run()
 
     }).run() pipeTo uniSelf

@@ -25,7 +25,6 @@ import akka.stream.FlowShape
 import akka.stream.scaladsl._
 import akka.util.Timeout
 import org.squbs.unicomplex.ActorWrapper
-import scala.concurrent.Future
 import akka.pattern._
 
 object Handler {
@@ -41,18 +40,23 @@ class Handler(routes: Agent[Seq[(Path, ActorWrapper)]])(implicit system: ActorSy
 
   def flow: Flow[HttpRequest, HttpResponse, Any] = dispatchFlow
 
-  // TODO FIX ME.
-  val inbound: Flow[ContextHolder, ContextHolder, Any] = Flow[ContextHolder].map(holder => holder.copy(ctx = holder.ctx.withAttributes("key1" -> "value1").addRequestHeaders(RawHeader("reqHeader", "reqHeaderValue"))))
-
-  val outbound: Flow[RequestContext, RequestContext, Any] = Flow[RequestContext].map {
-    ctx =>
-      val newResp = ctx.response.map(r => r.copy(headers = r.headers ++ RequestContext.attributes2Headers(ctx.attributes) ++ ctx.request.headers))
-      ctx.copy(response = newResp)
-  }
-
   import system.dispatcher
 
   def normPath(path: Path): Path = if (path.startsWithSlash) path.tail else path
+
+  def pathMatch(path: Path, target: Path): Boolean = {
+    if(path.length < target.length) false
+    else {
+      def innerMatch(path: Path, target:Path):Boolean = {
+        if (target.isEmpty) true
+        else target.head.equals(path.head) match {
+          case true => innerMatch(path.tail, target.tail)
+          case _ => false
+        }
+      }
+      innerMatch(path, target)
+    }
+  }
 
   // TODO FIX ME - Discuss with Akara and Qian.
   // I am not sure what exactly the timeout should be set to.  One option is to use akka.http.server.request-timeout; however,
@@ -62,58 +66,69 @@ class Handler(routes: Agent[Seq[(Path, ActorWrapper)]])(implicit system: ActorSy
   implicit val askTimeOut: Timeout = 5 seconds
   private def asyncHandler(actorWrapper: ActorWrapper) = (req: HttpRequest) => (actorWrapper.actor ? req).mapTo[HttpResponse]
 
-  val dispatchFlow: Flow[HttpRequest, HttpResponse, Any] =
+  val notFoundHttpResponse = HttpResponse(StatusCodes.NotFound, entity = StatusCodes.NotFound.defaultMessage)
+
+  lazy val routeFlow =
     Flow.fromGraph(GraphDSL.create() { implicit b =>
       import GraphDSL.Implicits._
 
-      val zip = b.add(Zip[HttpRequest, Int]())
-      val broadcast = b.add(Broadcast[ContextHolder](2))
-      val merge = b.add(Merge[RequestContext](2))
-      val pre = b.add(Flow[(HttpRequest, Int)].map {
-        case (request, id) =>
-          routes() find { entry =>
-            normPath(request.uri.path).startsWith(entry._1)
-          } match {
-            case Some((_, aw)) => ContextHolder(RequestContext(request, id), Some(asyncHandler(aw)))
-            case _ => ContextHolder(RequestContext(request, id), None)
-          }
+      val (paths, actorWrappers) = routes() unzip
+      val pathExtractor = (t: (RequestContext, Int)) => normPath(t._1.request.uri.path)
+      val pathMatcher = (p1: Path, p2: Path) => pathMatch(p1, p2)
+
+      val merge = b.add(Merge[(RequestContext, Int)](actorWrappers.size + 1))
+      val rss = b.add(RouteSelectorStage(paths, pathExtractor, pathMatcher))
+      actorWrappers.zipWithIndex foreach { case (aw, i) =>
+        val routeFlow = b.add(Flow[(RequestContext, Int)].mapAsync(akkaHttpConfig.getInt("server.pipelining-limit")) {
+          case(rc, id) => asyncHandler(aw)(rc.request) map (httpResponse => (rc.copy(response = Option(httpResponse)), id))
+        })
+        rss.out(i) ~> routeFlow ~> merge
+      }
+
+      val notFound = b.add(Flow[(RequestContext, Int)].map {
+        case(rc, id) => (rc.copy(response = Option(notFoundHttpResponse)), id)
       })
 
-      val goodFilter = Flow[ContextHolder].filter(_.transformer.isDefined)
-      val badFilter = Flow[ContextHolder].filter(_.transformer.isEmpty)
+      // Last output port is for 404
+      rss.out(actorWrappers.size) ~> notFound ~> merge
 
-      val coreFlow = Flow[ContextHolder].mapAsync(akkaHttpConfig.getInt("server.pipelining-limit")) {
-        ch => ch.transformer.get.apply(ch.ctx.request).map(resp => ch.ctx.copy(response = Option(resp)))
+      FlowShape(rss.in, merge.out)
+  })
+
+  lazy val dispatchFlow: Flow[HttpRequest, HttpResponse, Any] =
+    Flow.fromGraph(GraphDSL.create() { implicit b =>
+      import GraphDSL.Implicits._
+
+      // Wraps HttpRequest in a RequestContext
+      val createRequestContext = b.add(Flow[(HttpRequest, Int)].map {
+        case (httpRequest, id) => (RequestContext(httpRequest), id)
+      })
+
+      object TupleOrdering extends Ordering[(RequestContext, Int)] {
+        def compare(t1: (RequestContext, Int), t2: (RequestContext, Int)) = t1._2 compare t2._2
       }
 
-      val respFlow = b.add(Flow[RequestContext].map(
-        _.response.getOrElse(HttpResponse(StatusCodes.NotFound, entity = StatusCodes.NotFound.defaultMessage))))
+      val orderingStage = b.add(new OrderingStage[(RequestContext, Int), Int](0, (x: Int) => x + 1, (t: (RequestContext, Int)) => t._2)(TupleOrdering))
 
-      object RequestContextOrdering extends Ordering[RequestContext] {
-        def compare(a:RequestContext, b:RequestContext) = b.id compare a.id
-      }
+      val responseFlow = b.add(Flow[(RequestContext, Int)].map { case (rc, _) =>
+        rc.response getOrElse notFoundHttpResponse // TODO This actually might be a 500..
+      })
 
-      val orderingStage = b.add(new OrderingStage[RequestContext, Int](0, (x: Int) => x + 1, (rc: RequestContext) => rc.id)(RequestContextOrdering))
+      val zip = b.add(Zip[HttpRequest, Int]())
 
+      // Generate id for each request to order requests for  Http Pipelining
       Source.fromIterator(() => Iterator.from(0)) ~> zip.in1
-      zip.out ~> pre ~> broadcast ~> goodFilter ~> inbound ~> coreFlow ~> outbound  ~> merge ~> orderingStage ~> respFlow
-                        broadcast ~> badFilter.map(_.ctx)                           ~> merge
+      zip.out ~> createRequestContext ~> routeFlow ~> orderingStage ~> responseFlow
 
       // expose ports
-      FlowShape(zip.in0, respFlow.out)
+      FlowShape(zip.in0, responseFlow.out)
     })
 }
 
-case class ContextHolder(ctx: RequestContext, transformer: Option[HttpRequest => Future[HttpResponse]])
-
-
-case class ErrorLog(error : Throwable)
-// TODO Re-visit this..  Just copying for now..
+// TODO The structure of this needs to be re-visited.
 case class RequestContext(request: HttpRequest,
-                          id: Int = 1,
                           response: Option[HttpResponse] = None,
-                          attributes: Map[String, Any] = Map.empty,
-                          error : Option[ErrorLog] = None) {
+                          attributes: Map[String, Any] = Map.empty) {
 
   def withAttributes(attributes: (String, Any)*): RequestContext = {
     this.copy(attributes = this.attributes ++ attributes)
