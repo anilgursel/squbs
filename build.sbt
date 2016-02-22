@@ -22,9 +22,11 @@ updateOptions in ThisBuild := updateOptions.value.withCachedResolution(true)
 
 concurrentRestrictions in Global := Seq(Tags.limitAll(4))
 
+lazy val `squbs-filterchain` = project
+
 lazy val `squbs-pipeline` = project
 
-lazy val `squbs-unicomplex` = project dependsOn `squbs-pipeline`
+lazy val `squbs-unicomplex` = project dependsOn (`squbs-pipeline`, `squbs-filterchain`)
 
 lazy val `squbs-testkit` = project dependsOn `squbs-unicomplex`
 

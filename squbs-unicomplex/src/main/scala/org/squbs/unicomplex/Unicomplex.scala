@@ -27,6 +27,7 @@ import akka.actor.{Extension => AkkaExtension, _}
 import akka.agent.Agent
 import akka.pattern._
 import com.typesafe.config.Config
+import org.squbs.filterchain.FilterChainExtension
 import org.squbs.lifecycle.{ExtensionLifecycle, GracefulStop, GracefulStopHelper}
 import org.squbs.pipeline.PipelineManager
 import org.squbs.proxy.CubeProxyActor
@@ -90,7 +91,9 @@ private[unicomplex] case class  StartListener(name: String, config: Config)
 private[unicomplex] case object RoutesStarted
 private[unicomplex] case class  StartCubeActor(props: Props, name: String = "", initRequired: Boolean = false)
 private[unicomplex] case class  StartCubeService(webContext: String, listeners: Seq[String], props: Props,
-                                                 name: String = "", proxyName : Option[String] = None, initRequired: Boolean = false)
+                                                 name: String = "", proxyName : Option[String] = None,
+                                                 filterNames: Option[Seq[String]], defaultFiltersOn: Option[Boolean],
+                                                 initRequired: Boolean = false)
 private[unicomplex] case object CheckInitStatus
 private[unicomplex] case object Started
 private[unicomplex] case object Activate
@@ -546,7 +549,8 @@ class CubeSupervisor extends Actor with ActorLogging with GracefulStopHelper {
   import context.dispatcher
 
   val cubeName = self.path.name
-  val pipelineManager = PipelineManager(context.system)
+  val pipelineManager = PipelineManager(context.system) // Spray
+  val filterChainExtension = FilterChainExtension(context.system) // Akka-Http
   val actorErrorStatesAgent = Agent[Map[String, ActorErrorState]](Map())
 
   class CubeStateBean extends CubeStateMXBean {
@@ -592,6 +596,7 @@ class CubeSupervisor extends Actor with ActorLogging with GracefulStopHelper {
 
   private var cubeState: LifecycleState = Initializing
   private val initMap = mutable.HashMap.empty[ActorRef, Option[InitReport]]
+  private val isStreaming = true // TODO FIXME
 
   private var maxChildTimeout = stopTimeout
   Unicomplex() ! StopTimeout(maxChildTimeout * 2)
@@ -608,28 +613,41 @@ class CubeSupervisor extends Actor with ActorLogging with GracefulStopHelper {
       if (initRequired) initMap += cubeActor -> None
       log.info(s"Started actor ${cubeActor.path}")
 
-    case StartCubeService(webContext, listeners, props, name, proxyName, initRequired) =>
+    // Spray
+    case StartCubeService(webContext, listeners, props, name, proxyName, filterNames, defaultFiltersOn, initRequired) =>
 
       // Caution: The serviceActor may be the cubeActor in case of no proxy, or the proxy in case there is a proxy.
-      val (cubeActor, serviceActor) = try {
-        proxyName.fold(pipelineManager.default) {
-          case "" => None
-          case other => pipelineManager.getProcessor(other)
-        } match {
-          case None =>
-            val hostActor = context.actorOf(props, name) // disable proxy
-            (hostActor, SimpleActor(hostActor))
-          case Some(proc) =>
-            val hostActor = context.actorOf(props)
-            (hostActor, ProxiedActor(context.actorOf(Props(classOf[CubeProxyActor], proc, hostActor), name)))
+      val (cubeActor, serviceActor) =
+        if(!isStreaming) {
+          try {
+            proxyName.fold(pipelineManager.default) {
+              case "" => None
+              case other => pipelineManager.getProcessor(other)
+            } match {
+              case None =>
+                val hostActor = context.actorOf(props, name) // disable proxy
+                (hostActor, SimpleActor(hostActor))
+              case Some(proc) =>
+                val hostActor = context.actorOf(props)
+                (hostActor, ProxiedActor(context.actorOf(Props(classOf[CubeProxyActor], proc, hostActor), name)))
+            }
+          } catch {
+            case t: Throwable =>
+              log.error(t, "Cube {} proxy with name of {} initialized failed.", name, proxyName)
+              val hostActor = context.actorOf(props, name) // disable proxy
+              initMap += hostActor -> Some(Failure(t))
+              (hostActor, SimpleActor(hostActor))
+          }
+        } else {
+          filterChainExtension.getFilterChain(filterNames getOrElse Seq.empty) match {
+            case Some(filterChain) =>
+              val hostActor = context.actorOf(props)
+              (hostActor, ProxiedActor(context.actorOf(Props(classOf[streaming.CubeProxyActor], filterChain, hostActor), name)))
+            case None =>
+              val hostActor = context.actorOf(props, name) // No filter chain to execute
+              (hostActor, SimpleActor(hostActor))
+          }
         }
-      } catch {
-        case t: Throwable =>
-          log.error(t, "Cube {} proxy with name of {} initialized failed.", name, proxyName)
-          val hostActor = context.actorOf(props, name) // disable proxy
-          initMap += hostActor -> Some(Failure(t))
-          (hostActor, SimpleActor(hostActor))
-      }
 
       if (initRequired && !(initMap contains cubeActor)) initMap += cubeActor -> None
       Unicomplex() ! RegisterContext(listeners, webContext, serviceActor)
