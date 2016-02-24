@@ -29,6 +29,7 @@ import akka.pattern._
 import com.typesafe.config.Config
 import org.squbs.lifecycle.{ExtensionLifecycle, GracefulStop, GracefulStopHelper}
 import org.squbs.pipeline.PipelineManager
+import org.squbs.pipeline.streaming.PipelineSetting
 import org.squbs.proxy.CubeProxyActor
 import org.squbs.unicomplex.UnicomplexBoot.StartupType
 
@@ -90,7 +91,9 @@ private[unicomplex] case class  StartListener(name: String, config: Config)
 private[unicomplex] case object RoutesStarted
 private[unicomplex] case class  StartCubeActor(props: Props, name: String = "", initRequired: Boolean = false)
 private[unicomplex] case class  StartCubeService(webContext: String, listeners: Seq[String], props: Props,
-                                                 name: String = "", proxyName : Option[String] = None, initRequired: Boolean = false)
+                                                 name: String = "", proxyName : Option[String] = None,
+                                                 ps: PipelineSetting, initRequired: Boolean = false)
+
 private[unicomplex] case object CheckInitStatus
 private[unicomplex] case object Started
 private[unicomplex] case object Activate
@@ -375,8 +378,8 @@ class Unicomplex extends Actor with Stash with ActorLogging {
         serviceRegistry.prepListeners(listeners.keys)
       }
 
-    case RegisterContext(listeners, webContext, actor) =>
-      serviceRegistry.registerContext(listeners, webContext, actor)
+    case RegisterContext(listeners, webContext, actor, ps) =>
+      serviceRegistry.registerContext(listeners, webContext, actor, ps)
 
     case StartListener(name, conf) => // Sent from Bootstrap to start the web service infrastructure.
 
@@ -608,7 +611,7 @@ class CubeSupervisor extends Actor with ActorLogging with GracefulStopHelper {
       if (initRequired) initMap += cubeActor -> None
       log.info(s"Started actor ${cubeActor.path}")
 
-    case StartCubeService(webContext, listeners, props, name, proxyName, initRequired) =>
+    case StartCubeService(webContext, listeners, props, name, proxyName, ps, initRequired) =>
 
       // Caution: The serviceActor may be the cubeActor in case of no proxy, or the proxy in case there is a proxy.
       val (cubeActor, serviceActor) = try {
@@ -632,7 +635,7 @@ class CubeSupervisor extends Actor with ActorLogging with GracefulStopHelper {
       }
 
       if (initRequired && !(initMap contains cubeActor)) initMap += cubeActor -> None
-      Unicomplex() ! RegisterContext(listeners, webContext, serviceActor)
+      Unicomplex() ! RegisterContext(listeners, webContext, serviceActor, ps)
       log.info(s"Started service actor ${cubeActor.path} for context $webContext")
 
     case Started => // Signals end of StartCubeActor messages. No more allowed after this.

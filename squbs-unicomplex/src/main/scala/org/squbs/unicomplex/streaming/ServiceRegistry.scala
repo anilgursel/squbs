@@ -33,6 +33,7 @@ import akka.stream.ActorMaterializer
 import akka.stream.io.ClientAuth.{Need, Want}
 import akka.stream.scaladsl.Sink
 import com.typesafe.config.Config
+import org.squbs.pipeline.streaming.PipelineSetting
 import org.squbs.unicomplex._
 import org.squbs.unicomplex.streaming.StatsSupport.StatsHolder
 
@@ -49,12 +50,12 @@ class ServiceRegistry(val log: LoggingAdapter) extends ServiceRegistryBase[Path]
 
   private var serverBindigs = Map.empty[String, Option[(ServerBinding)]] // Service actor and HttpListener actor
 
-  var listenerRoutesVar = Map.empty[String, Agent[Seq[(Path, ActorWrapper)]]]
+  var listenerRoutesVar = Map.empty[String, Agent[Seq[(Path, ActorWrapper, PipelineSetting)]]]
 
-  override protected def listenerRoutes: Map[String, Agent[Seq[(Path, ActorWrapper)]]] = listenerRoutesVar
+  override protected def listenerRoutes: Map[String, Agent[Seq[(Path, ActorWrapper, PipelineSetting)]]] = listenerRoutesVar
 
-  override protected def listenerRoutes_=[B](newListenerRoutes: Map[String, Agent[Seq[(B, ActorWrapper)]]]): Unit =
-    listenerRoutesVar = newListenerRoutes.asInstanceOf[Map[String, Agent[Seq[(Path, ActorWrapper)]]]]
+  override protected def listenerRoutes_=[B](newListenerRoutes: Map[String, Agent[Seq[(B, ActorWrapper, PipelineSetting)]]]): Unit =
+    listenerRoutesVar = newListenerRoutes.asInstanceOf[Map[String, Agent[Seq[(Path, ActorWrapper, PipelineSetting)]]]]
 
   override private[unicomplex] def startListener(name: String, config: Config, notifySender: ActorRef)
                                                 (implicit context: ActorContext): Receive = {
@@ -105,7 +106,7 @@ class ServiceRegistry(val log: LoggingAdapter) extends ServiceRegistryBase[Path]
   override private[unicomplex] def prepListeners(listenerNames: Iterable[String])(implicit context: ActorContext) {
     import context.dispatcher
     listenerRoutes = listenerNames.map { listener =>
-      listener -> Agent[Seq[(Path, ActorWrapper)]](Seq.empty)
+      listener -> Agent[Seq[(Path, ActorWrapper, PipelineSetting)]](Seq.empty)
     }.toMap
 
     import org.squbs.unicomplex.JMX._
@@ -134,7 +135,7 @@ class ServiceRegistry(val log: LoggingAdapter) extends ServiceRegistryBase[Path]
 //    Http().shutdownAllConnectionPools() andThen { case _ =>
       serverBindigs foreach {
         case (name, Some(sb)) =>
-          listenerRoutes(name)() foreach {case (_, aw) => aw.actor ! PoisonPill}
+          listenerRoutes(name)() foreach {case (_, aw, _) => aw.actor ! PoisonPill}
           listenerRoutes = listenerRoutes - name
           sb.unbind() andThen { case _ => uniSelf ! Unbound(sb) }
           if (listenerRoutes.isEmpty) {

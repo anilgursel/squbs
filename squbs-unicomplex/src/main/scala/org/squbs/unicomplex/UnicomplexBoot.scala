@@ -29,6 +29,7 @@ import akka.util.Timeout
 import com.typesafe.config._
 import com.typesafe.scalalogging.LazyLogging
 import org.squbs.lifecycle.ExtensionLifecycle
+import org.squbs.pipeline.streaming.PipelineSetting
 import org.squbs.unicomplex.ConfigUtil._
 import org.squbs.unicomplex.UnicomplexBoot.CubeInit
 
@@ -311,7 +312,8 @@ object UnicomplexBoot extends LazyLogging {
       }
     }
 
-    def startServiceRoute(clazz: Class[_], proxyName : Option[String], webContext: String, listeners: Seq[String]) = {
+    def startServiceRoute(clazz: Class[_], proxyName : Option[String], webContext: String, listeners: Seq[String],
+                          ps: PipelineSetting ) = {
 
         Try {
           // Try non-streaming RouteDefinition first.
@@ -328,7 +330,7 @@ object UnicomplexBoot extends LazyLogging {
             val actorName =
               if (webContext.length > 0) s"${webContext.replace('/', '_')}-$className-route"
               else s"root-$className-route"
-            cubeSupervisor ! StartCubeService(webContext, listeners, props, actorName, proxyName, initRequired = true)
+            cubeSupervisor ! StartCubeService(webContext, listeners, props, actorName, proxyName, ps, initRequired = true)
             Some((fullName, name, version, clazz))
           case _ => None
       }
@@ -341,7 +343,7 @@ object UnicomplexBoot extends LazyLogging {
     }
 
     def startServiceActor(clazz: Class[_], proxyName : Option[String], webContext: String, listeners: Seq[String],
-                          initRequired: Boolean) = {
+                          ps: PipelineSetting, initRequired: Boolean) = {
       try {
         val actorClass = clazz asSubclass classOf[Actor]
         def actorCreator: Actor = WebContext.createWithContext[Actor](webContext) { actorClass.newInstance() }
@@ -350,7 +352,7 @@ object UnicomplexBoot extends LazyLogging {
         val actorName =
           if (webContext.length > 0) s"${webContext.replace('/', '_')}-$className-handler"
           else s"root-$className-handler"
-        cubeSupervisor ! StartCubeService(webContext, listeners, props, actorName, proxyName, initRequired)
+        cubeSupervisor ! StartCubeService(webContext, listeners, props, actorName, proxyName, ps, initRequired)
         Some((fullName, name, version, actorClass))
       } catch {
         case e: ClassCastException => None
@@ -372,6 +374,10 @@ object UnicomplexBoot extends LazyLogging {
       val clazz = Class.forName(className, true, getClass.getClassLoader)
       val proxyName = getProxyName(serviceConfig)
       val webContext = serviceConfig.getString("web-context")
+      val inboundFlow = serviceConfig.getOptionalStringList("inbound")
+      val outboundFlow = serviceConfig.getOptionalStringList("outbound")
+      val defaultFlowsOn = serviceConfig.getOptionalBoolean("defaultFlowsOn")
+      val streamingFlowSettings = (inboundFlow, outboundFlow, defaultFlowsOn)
 
       val listeners = serviceConfig.getOptionalStringList("listeners").fold(Seq("default-listener"))({ list =>
 
@@ -390,8 +396,8 @@ object UnicomplexBoot extends LazyLogging {
         else listenerMapping collect { case (entry, Some(listener)) => listener }
       })
 
-      val service = startServiceRoute(clazz, proxyName,webContext, listeners) orElse startServiceActor(
-        clazz, proxyName, webContext, listeners, serviceConfig getOptionalBoolean "init-required" getOrElse false)
+      val service = startServiceRoute(clazz, proxyName,webContext, listeners, streamingFlowSettings) orElse startServiceActor(
+        clazz, proxyName, webContext, listeners, streamingFlowSettings, serviceConfig getOptionalBoolean "init-required" getOrElse false)
 
       if (service == None) throw new ClassCastException(s"Class $className is neither a RouteDefinition nor an Actor.")
       service

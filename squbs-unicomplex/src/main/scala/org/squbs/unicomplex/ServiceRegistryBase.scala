@@ -23,51 +23,53 @@ import akka.agent.Agent
 import akka.event.LoggingAdapter
 import akka.io.IO
 import com.typesafe.config.Config
+import org.squbs.pipeline.streaming.PipelineSetting
 import org.squbs.unicomplex.ConfigUtil._
 
 import scala.concurrent.{Future, ExecutionContext}
 import scala.collection.mutable.ListBuffer
 
-trait ServiceRegistryBase[T] {
+trait ServiceRegistryBase[A] {
 
   val log: LoggingAdapter
 
-  protected def listenerRoutes: Map[String, Agent[Seq[(T, ActorWrapper)]]]
+  protected def listenerRoutes: Map[String, Agent[Seq[(A, ActorWrapper, PipelineSetting)]]]
 
-  protected def listenerRoutes_=[B](newListenerRoutes: Map[String, Agent[Seq[(B, ActorWrapper)]]]): Unit
+  protected def listenerRoutes_=[B](newListenerRoutes: Map[String, Agent[Seq[(B, ActorWrapper, PipelineSetting)]]]): Unit
 
   private[unicomplex] def prepListeners(listenerNames: Iterable[String])(implicit context: ActorContext) {
     import context.dispatcher
     listenerRoutes = listenerNames.map { listener =>
-      listener -> Agent[Seq[(T, ActorWrapper)]](Seq.empty)
+      listener -> Agent[Seq[(A, ActorWrapper, PipelineSetting)]](Seq.empty)
     }.toMap
 
     import org.squbs.unicomplex.JMX._
     register(new ListenerBean(listenerRoutes), prefix + listenersName)
   }
 
-  private[unicomplex] def registerContext(listeners: Iterable[String], webContext: String, servant: ActorWrapper) {
+  private[unicomplex] def registerContext(listeners: Iterable[String], webContext: String, servant: ActorWrapper,
+                                          ps: PipelineSetting) {
     listeners foreach { listener =>
       val agent = listenerRoutes(listener)
       agent.send {
         currentSeq =>
-          merge(currentSeq, webContext, servant, {
+          merge(currentSeq, webContext, servant, ps, {
             log.warning(s"Web context $webContext already registered on $listener. Override existing registration.")
           })
       }
     }
   }
 
-  protected def pathCompanion(s: String): T
+  protected def pathCompanion(s: String): A
 
-  protected def pathLength(p: T): Int
+  protected def pathLength(p: A): Int
 
   private[unicomplex] def deregisterContext(webContexts: Seq[String])
                                            (implicit ec: ExecutionContext): Future[Ack.type] = {
     val futures = listenerRoutes flatMap {
       case (_, agent) => webContexts map { ctx => agent.alter {
         oldEntries =>
-          val buffer = ListBuffer[(T, ActorWrapper)]()
+          val buffer = ListBuffer[(A, ActorWrapper, PipelineSetting)]()
           val path = pathCompanion(ctx)
           oldEntries.foreach {
             entry => if (!entry._1.equals(path)) buffer += entry
@@ -127,12 +129,12 @@ trait ServiceRegistryBase[T] {
     (interface, port, localPort, sslContext, needClientAuth)
   }
 
-  private[unicomplex] def merge[C](oldRegistry: Seq[(T, C)], webContext: String, servant: C,
-                                             overrideWarning: => Unit = {}): Seq[(T, C)] = {
-    val newMember = (pathCompanion(webContext), servant)
+  private[unicomplex] def merge[B, C](oldRegistry: Seq[(A, B, C)], webContext: String, servant: B, pipelineSetting: C,
+                                   overrideWarning: => Unit = {}): Seq[(A, B, C)] = {
+    val newMember = (pathCompanion(webContext), servant, pipelineSetting)
     if (oldRegistry.isEmpty) Seq(newMember)
     else {
-      val buffer = ListBuffer[(T, C)]()
+      val buffer = ListBuffer[(A, B, C)]()
       var added = false
       oldRegistry foreach {
         entry =>
@@ -156,12 +158,12 @@ trait ServiceRegistryBase[T] {
 }
 
 
-class ListenerBean[T](listenerRoutes: Map[String, Agent[Seq[(T, ActorWrapper)]]]) extends ListenerMXBean {
+class ListenerBean[A](listenerRoutes: Map[String, Agent[Seq[(A, ActorWrapper, PipelineSetting)]]]) extends ListenerMXBean {
 
   override def getListeners: java.util.List[ListenerInfo] = {
     import scala.collection.JavaConversions._
     listenerRoutes.flatMap { case (listenerName, agent) =>
-      agent() map { case (webContext, servant) =>
+      agent() map { case (webContext, servant, _) => // TODO Pass PipelineSetting
         ListenerInfo(listenerName, webContext.toString(), servant.actor.toString())
       }
     }.toSeq

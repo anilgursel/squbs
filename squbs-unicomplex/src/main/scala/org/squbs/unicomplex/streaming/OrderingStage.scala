@@ -22,7 +22,8 @@ import akka.stream.{Attributes, FlowShape, Inlet, Outlet}
 import scala.annotation.tailrec
 import scala.collection.mutable
 
-class OrderingStage[A, B](initialState: B, updateState: B => B, getState: A => B)(implicit val ordering: Ordering[A]) extends GraphStage[FlowShape[A, A]] {
+class OrderingStage[A, B](initialState: B, updateState: B => B, getState: A => B)(implicit val ordering: Ordering[A])
+  extends GraphStage[FlowShape[A, A]] {
 
   val in = Inlet[A]("Filter.in")
   val out = Outlet[A]("Filter.out")

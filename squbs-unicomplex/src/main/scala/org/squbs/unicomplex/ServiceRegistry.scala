@@ -25,6 +25,7 @@ import akka.agent.Agent
 import akka.event.LoggingAdapter
 import akka.io.IO
 import com.typesafe.config.Config
+import org.squbs.pipeline.streaming.PipelineSetting
 import spray.can.Http
 import spray.can.server.ServerSettings
 import spray.http.StatusCodes.NotFound
@@ -40,7 +41,7 @@ import scala.language.postfixOps
 import scala.util.{Failure, Success}
 import akka.pattern._
 
-case class RegisterContext(listeners: Seq[String], webContext: String, actor: ActorWrapper)
+case class RegisterContext(listeners: Seq[String], webContext: String, actor: ActorWrapper, ps: PipelineSetting)
 
 object RegisterContext {
 
@@ -92,12 +93,12 @@ class ServiceRegistry(val log: LoggingAdapter) extends ServiceRegistryBase[Path]
 
   private var serviceListeners = Map.empty[String, Option[(ActorRef, ActorRef)]] // Service actor and HttpListener actor
 
-  private var listenerRoutesVar = Map.empty[String, Agent[Seq[(Path, ActorWrapper)]]]
+  private var listenerRoutesVar = Map.empty[String, Agent[Seq[(Path, ActorWrapper, PipelineSetting)]]]
 
-  override protected def listenerRoutes: Map[String, Agent[Seq[(Path, ActorWrapper)]]] = listenerRoutesVar
+  override protected def listenerRoutes: Map[String, Agent[Seq[(Path, ActorWrapper, PipelineSetting)]]] = listenerRoutesVar
 
-  override protected def listenerRoutes_=[B](newListenerRoutes: Map[String, Agent[Seq[(B, ActorWrapper)]]]): Unit =
-    listenerRoutesVar = newListenerRoutes.asInstanceOf[Map[String, Agent[Seq[(Path, ActorWrapper)]]]]
+  override protected def listenerRoutes_=[B](newListenerRoutes: Map[String, Agent[Seq[(B, ActorWrapper, PipelineSetting)]]]): Unit =
+    listenerRoutesVar = newListenerRoutes.asInstanceOf[Map[String, Agent[Seq[(Path, ActorWrapper, PipelineSetting)]]]]
 
   override protected def pathCompanion(s: String) = Path(s)
 
@@ -247,7 +248,7 @@ private[unicomplex] class RouteActor(webContext: String, clazz: Class[RouteDefin
   }
 }
 
-private[unicomplex] class ListenerActor(name: String, routes: Agent[Seq[(Path, ActorWrapper)]],
+private[unicomplex] class ListenerActor(name: String, routes: Agent[Seq[(Path, ActorWrapper, PipelineSetting)]],
                                         localPort: Option[Int] = None) extends Actor with ActorLogging {
   import RegisterContext._
 
@@ -259,11 +260,11 @@ private[unicomplex] class ListenerActor(name: String, routes: Agent[Seq[(Path, A
 
     import request.uri.path
     val normPath = if (path.startsWithSlash) path.tail else path //normalize it to make sure not start with '/'
-    val routeOption = routes() find { case (contextPath, _) => pathMatch(normPath, contextPath) }
+    val routeOption = routes() find { case (contextPath, _, _) => pathMatch(normPath, contextPath) }
 
     routeOption flatMap {
-      case (webCtx, ProxiedActor(actor)) => Some(patchHeaders(request, Some(webCtx.toString())), actor)
-      case (_, SimpleActor(actor)) => Some(patchHeaders(request), actor)
+      case (webCtx, ProxiedActor(actor), _) => Some(patchHeaders(request, Some(webCtx.toString())), actor)
+      case (_, SimpleActor(actor), _) => Some(patchHeaders(request), actor)
       case _ => None
     }
   }

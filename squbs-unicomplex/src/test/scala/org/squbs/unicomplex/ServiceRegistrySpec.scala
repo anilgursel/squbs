@@ -29,23 +29,24 @@ class ServiceRegistrySpec extends TestKit(ActorSystem("ServiceRegistrySpec")) wi
     import serviceRegistry.merge
     import RegisterContext._
 
-    val result = merge(Seq(), "abc", "old")
+    val pipelineSetting = (None, None, None)
+    val result = merge(Seq(), "abc", "old", pipelineSetting)
     result should have size 1
     result(0)._2 should be ("old")
 
-    val result1 = merge(result, "", "empty")
+    val result1 = merge(result, "", "empty", pipelineSetting)
     result1 should have size 2
     result1(0)._2 should be ("old")
     result1(1)._2 should be ("empty")
 
 
-    val result2 = merge(result1, "abc/def", "abc/def")
+    val result2 = merge(result1, "abc/def", "abc/def", pipelineSetting)
     result2 should have size 3
     result2(0)._2 should be ("abc/def")
     result2(1)._2 should be ("old")
     result2(2)._2 should be ("empty")
 
-    val result3 = merge(result2, "abc", "new")
+    val result3 = merge(result2, "abc", "new", pipelineSetting)
     result3 should have size 3
     result3(0)._2 should be ("abc/def")
     result3(1)._2 should be ("new")
