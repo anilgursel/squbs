@@ -16,6 +16,7 @@
 
 package org.squbs.pipeline
 
+import akka.NotUsed
 import akka.stream.scaladsl.Flow
 
 package object streaming {
@@ -23,5 +24,5 @@ package object streaming {
   // (inbound flow, outbound flow, defaults on/off )
   type PipelineSetting = (Option[Seq[String]], Option[Seq[String]], Option[Boolean])
 
-  type PipelineFlow = Flow[RequestContext, RequestContext, Unit]
+  type PipelineFlow = Flow[RequestContext, RequestContext, NotUsed]
 }

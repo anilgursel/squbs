@@ -16,14 +16,17 @@
 
 package org.squbs.pipeline.streaming
 
+import akka.NotUsed
 import akka.actor._
 import akka.stream.FlowShape
 import akka.stream.scaladsl.{GraphDSL, Flow}
 import com.typesafe.config.ConfigObject
 
+import scala.annotation.tailrec
+
 trait FlowFactory {
 
-  def create: Flow[RequestContext, RequestContext, Unit]
+  def create: Flow[RequestContext, RequestContext, NotUsed]
 }
 
 class PipelineExtensionImpl(flowMap: Map[String, (PipelineFlow, Int)],
@@ -67,7 +70,7 @@ class PipelineExtensionImpl(flowMap: Map[String, (PipelineFlow, Int)],
         Flow.fromGraph(GraphDSL.create() { implicit b =>
           import GraphDSL.Implicits._
 
-          def connectFlows(fs: Seq[FlowShape[RequestContext, RequestContext]], index: Int) {
+          @tailrec def connectFlows(fs: Seq[FlowShape[RequestContext, RequestContext]], index: Int) {
             if(index + 1 < fs.size) {
               fs(index) ~> fs(index + 1)
               connectFlows(fs, index + 1)
@@ -94,7 +97,7 @@ object PipelineExtension extends ExtensionId[PipelineExtensionImpl] with Extensi
       case (n, v: ConfigObject) if v.toConfig.getOptionalString("type").contains("squbs.pipelineflow") => (n, v.toConfig)
     }
 
-    var flowMap = Map.empty[String, (Flow[RequestContext, RequestContext, Unit], Int)]
+    var flowMap = Map.empty[String, (Flow[RequestContext, RequestContext, NotUsed], Int)]
     flows foreach { case (name, config) =>
       val order = config.getInt("order")
       val factoryClassName = config.getString("factory")

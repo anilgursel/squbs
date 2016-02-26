@@ -27,10 +27,10 @@ import akka.http.scaladsl.Http.ServerBinding
 import akka.http.scaladsl.model.Uri.Path
 import akka.http.scaladsl.server.directives.PathDirectives
 import akka.http.scaladsl.server._
-import akka.http.scaladsl.{Http, HttpsContext}
+import akka.http.scaladsl.{ConnectionContext, Http}
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
 import akka.stream.ActorMaterializer
-import akka.stream.io.ClientAuth.{Need, Want}
+import akka.stream.TLSClientAuth.{Want, Need}
 import akka.stream.scaladsl.Sink
 import com.typesafe.config.Config
 import org.squbs.pipeline.streaming.PipelineSetting
@@ -69,8 +69,8 @@ class ServiceRegistry(val log: LoggingAdapter) extends ServiceRegistryBase[Path]
     val uniSelf = context.self
     val serverFlow = (sslContext match {
       case Some(sslCtx) =>
-        val httpsCtx = Some(HttpsContext(sslCtx, clientAuth = Some { if(needClientAuth) Need else Want }))
-        Http().bind(interface, port, httpsContext = httpsCtx )
+        val httpsCtx = ConnectionContext.https(sslCtx, clientAuth = Some { if(needClientAuth) Need else Want })
+        Http().bind(interface, port, connectionContext = httpsCtx )
 
       case None => Http().bind(interface, port)
     })
