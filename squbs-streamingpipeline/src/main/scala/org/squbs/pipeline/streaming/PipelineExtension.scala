@@ -19,7 +19,7 @@ package org.squbs.pipeline.streaming
 import akka.NotUsed
 import akka.actor._
 import akka.stream.FlowShape
-import akka.stream.scaladsl.{GraphDSL, Flow}
+import akka.stream.scaladsl.{Merge, Broadcast, GraphDSL, Flow}
 import com.typesafe.config.ConfigObject
 
 import scala.annotation.tailrec
@@ -70,9 +70,20 @@ class PipelineExtensionImpl(flowMap: Map[String, (PipelineFlow, Int)],
         Flow.fromGraph(GraphDSL.create() { implicit b =>
           import GraphDSL.Implicits._
 
+          // Assume that inbound has three flows: flow1, flow2 and flow3.  The expectation is to have the flow as:
+          // flow1 ~> flow2 ~> flow3.  However, we would like to bypass subsequent flows if HttpResponse or some flag
+          // is already set by previous stages.  So, below is the graph that actually gets built:
+          //
+          // flow1 ~> bCast1 ~> filterResponseEmpty     ~> flow2 ~> bCast2 ~> filterResponseEmpty ~> flow3 ~> merge
+          //          bCast1 ~> filterResponseNonEmpty                                                     ~> merge
+          //                                                        bCast2 ~> filterResponseNonEmpty       ~> merge
+          val merge = b.add(Merge[RequestContext](flows.size))
           @tailrec def connectFlows(fs: Seq[FlowShape[RequestContext, RequestContext]], index: Int) {
             if(index + 1 < fs.size) {
-              fs(index) ~> fs(index + 1)
+              val broadCast = b.add(Broadcast[RequestContext](2))
+              fs(index) ~> broadCast
+              broadCast.out(0).filter(_.response.isEmpty) ~> fs(index + 1)
+              broadCast.out(1).filter(_.response.nonEmpty) ~> merge.in(index)
               connectFlows(fs, index + 1)
             }
           }
@@ -80,7 +91,8 @@ class PipelineExtensionImpl(flowMap: Map[String, (PipelineFlow, Int)],
           val flowShapes = flows map(b.add(_))
           connectFlows(flowShapes, 0)
 
-          FlowShape(flowShapes(0).in, flowShapes.last.out)
+          flowShapes.last.out ~> merge.in(flows.size - 1)
+          FlowShape(flowShapes(0).in, merge.out)
         })
       )
     }
