@@ -17,12 +17,32 @@
 package org.squbs.pipeline
 
 import akka.NotUsed
-import akka.stream.scaladsl.Flow
+import akka.stream.BidiShape
+import akka.stream.scaladsl.{Merge, Broadcast, GraphDSL, BidiFlow}
 
 package object streaming {
 
-  // (inbound flow, outbound flow, defaults on/off )
-  type PipelineSetting = (Option[Seq[String]], Option[Seq[String]], Option[Boolean])
+  // (BidiFlow name, defaults on/off )
+  type PipelineSetting = (Option[String], Option[Boolean])
 
-  type PipelineFlow = Flow[RequestContext, RequestContext, NotUsed]
+  type PipelineFlow = BidiFlow[RequestContext, RequestContext, RequestContext, RequestContext, NotUsed]
+
+  implicit class AbortableBidiFlow(val underlying: PipelineFlow) {
+
+    def withAbortable: PipelineFlow = {
+      underlying.atop(abortable)
+    }
+  }
+
+  val abortable = BidiFlow.fromGraph(GraphDSL.create() { implicit b =>
+    import GraphDSL.Implicits._
+
+    val bCast = b.add(Broadcast[RequestContext](2))
+    val out1 = bCast.out(0).filter(_.response.isEmpty).outlet
+
+    val merge = b.add(Merge[RequestContext](2))
+    bCast.out(1).filter(_.response.nonEmpty) ~> merge
+
+    BidiShape(bCast.in, out1, merge.in(1), merge.out)
+  })
 }

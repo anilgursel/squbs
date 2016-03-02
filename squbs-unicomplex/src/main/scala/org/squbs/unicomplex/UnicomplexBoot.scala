@@ -374,10 +374,9 @@ object UnicomplexBoot extends LazyLogging {
       val clazz = Class.forName(className, true, getClass.getClassLoader)
       val proxyName = getProxyName(serviceConfig)
       val webContext = serviceConfig.getString("web-context")
-      val inboundFlow = serviceConfig.getOptionalStringList("inbound")
-      val outboundFlow = serviceConfig.getOptionalStringList("outbound")
-      val defaultFlowsOn = serviceConfig.getOptionalBoolean("defaultFlowsOn")
-      val streamingFlowSettings = (inboundFlow, outboundFlow, defaultFlowsOn)
+      val pipeline = serviceConfig.getOptionalString("pipeline")
+      val defaultFlowsOn = serviceConfig.getOptionalBoolean("defaultPipelineOn")
+      val streamingPipelineSettings = (pipeline, defaultFlowsOn)
 
       val listeners = serviceConfig.getOptionalStringList("listeners").fold(Seq("default-listener"))({ list =>
 
@@ -396,8 +395,9 @@ object UnicomplexBoot extends LazyLogging {
         else listenerMapping collect { case (entry, Some(listener)) => listener }
       })
 
-      val service = startServiceRoute(clazz, proxyName,webContext, listeners, streamingFlowSettings) orElse startServiceActor(
-        clazz, proxyName, webContext, listeners, streamingFlowSettings, serviceConfig getOptionalBoolean "init-required" getOrElse false)
+      val service = startServiceRoute(clazz, proxyName,webContext, listeners, streamingPipelineSettings) orElse
+        startServiceActor(clazz, proxyName, webContext, listeners, streamingPipelineSettings,
+                          serviceConfig getOptionalBoolean "init-required" getOrElse false)
 
       if (service == None) throw new ClassCastException(s"Class $className is neither a RouteDefinition nor an Actor.")
       service

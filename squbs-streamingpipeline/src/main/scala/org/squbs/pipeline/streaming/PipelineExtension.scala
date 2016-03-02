@@ -18,84 +18,47 @@ package org.squbs.pipeline.streaming
 
 import akka.NotUsed
 import akka.actor._
-import akka.stream.FlowShape
-import akka.stream.scaladsl.{Merge, Broadcast, GraphDSL, Flow}
+import akka.stream.scaladsl._
 import com.typesafe.config.ConfigObject
 
-import scala.annotation.tailrec
+trait PipelineFlowFactory {
 
-trait FlowFactory {
-
-  def create: Flow[RequestContext, RequestContext, NotUsed]
+  def create: BidiFlow[RequestContext, RequestContext, RequestContext, RequestContext, NotUsed]
 }
 
-class PipelineExtensionImpl(flowMap: Map[String, (PipelineFlow, Int)],
-                            defaultInboundFlows: Option[Seq[String]],
-                            defaultOutboundFlows: Option[Seq[String]]) extends Extension {
+class PipelineExtensionImpl(flowMap: Map[String, PipelineFlow],
+                            defaultPreFlow: Option[String],
+                            defaultPostFlow: Option[String]) extends Extension {
 
-  def getFlows(pipelineSetting: PipelineSetting): (Option[PipelineFlow], Option[PipelineFlow]) = {
+  def getFlow(pipelineSetting: PipelineSetting): Option[PipelineFlow] = {
 
-    val (inbound, outbound, defaultsOn) = pipelineSetting
+    val (appFlow, defaultsOn) = pipelineSetting
 
-    val inboundWithDefaults = if(defaultsOn getOrElse true) {
-                                inbound getOrElse Seq.empty[String] ++ (defaultInboundFlows getOrElse Seq.empty[String])
-                              } else {
-                                inbound getOrElse Seq.empty[String]
-                              }
+    val pipelineFlowNames = (if(defaultsOn getOrElse true) { defaultPreFlow :: appFlow :: defaultPostFlow :: Nil }
+                             else { appFlow :: Nil }) flatten
 
-    val outboundWithDefaults = if(defaultsOn getOrElse true) {
-                                outbound getOrElse Seq.empty[String] ++ (defaultInboundFlows getOrElse Seq.empty[String])
-                              } else {
-                                outbound getOrElse Seq.empty[String]
-                              }
-
-
-    (buildPipeline(inboundWithDefaults), buildPipeline(outboundWithDefaults))
+    if(pipelineFlowNames.isEmpty) { None }
+    else { buildPipeline(pipelineFlowNames) }
   }
 
   private def buildPipeline(flowNames: Seq[String]) = {
 
-    // Get an ordered (based on order number specified in Config) Seq of Flows mentioned in flowNames
-    val flows = flowMap.toSeq collect { case (name, flowWithOrder) if flowNames.contains(name) =>
-      flowWithOrder
-    } sortBy(_._2) map { case (flow, _) => flow }
+    val flows = flowMap.toList collect { case (name, flow) if flowNames.contains(name) => flow }
 
+    // TODO Hmm..  This will be encountered during materialization time, in other words, runtime..  Not startup..
     if(flowNames.size != flows.size) {
       throw new IllegalArgumentException(s"Pipeline contains unknown flows: [${flowNames.mkString(",")}]")
     }
 
-    if(flows.size == 0) { None }
-    else {
-      Some(
-        Flow.fromGraph(GraphDSL.create() { implicit b =>
-          import GraphDSL.Implicits._
+    def connectFlows(flowList: List[PipelineFlow]): PipelineFlow = {
 
-          // Assume that inbound has three flows: flow1, flow2 and flow3.  The expectation is to have the flow as:
-          // flow1 ~> flow2 ~> flow3.  However, we would like to bypass subsequent flows if HttpResponse or some flag
-          // is already set by previous stages.  So, below is the graph that actually gets built:
-          //
-          // flow1 ~> bCast1 ~> filterResponseEmpty     ~> flow2 ~> bCast2 ~> filterResponseEmpty ~> flow3 ~> merge
-          //          bCast1 ~> filterResponseNonEmpty                                                     ~> merge
-          //                                                        bCast2 ~> filterResponseNonEmpty       ~> merge
-          val merge = b.add(Merge[RequestContext](flows.size))
-          @tailrec def connectFlows(fs: Seq[FlowShape[RequestContext, RequestContext]], index: Int) {
-            if(index + 1 < fs.size) {
-              val broadCast = b.add(Broadcast[RequestContext](2))
-              fs(index) ~> broadCast
-              broadCast.out(0).filter(_.response.isEmpty) ~> fs(index + 1)
-              broadCast.out(1).filter(_.response.nonEmpty) ~> merge.in(index)
-              connectFlows(fs, index + 1)
-            }
-          }
-
-          val flowShapes = flows map(b.add(_))
-          connectFlows(flowShapes, 0)
-
-          flowShapes.last.out ~> merge.in(flows.size - 1)
-          FlowShape(flowShapes(0).in, merge.out)
-        })
-      )
+      flowList match {
+        case head :: Nil => head
+        case head :: tail => head.atop(connectFlows(tail))
+      }
     }
+
+    Some(connectFlows(flows))
   }
 }
 
@@ -109,19 +72,18 @@ object PipelineExtension extends ExtensionId[PipelineExtensionImpl] with Extensi
       case (n, v: ConfigObject) if v.toConfig.getOptionalString("type").contains("squbs.pipelineflow") => (n, v.toConfig)
     }
 
-    var flowMap = Map.empty[String, (Flow[RequestContext, RequestContext, NotUsed], Int)]
+    var flowMap = Map.empty[String, PipelineFlow]
     flows foreach { case (name, config) =>
-      val order = config.getInt("order")
       val factoryClassName = config.getString("factory")
 
-      val flowFactory = Class.forName(factoryClassName).newInstance().asInstanceOf[FlowFactory]
+      val flowFactory = Class.forName(factoryClassName).newInstance().asInstanceOf[PipelineFlowFactory]
 
-      flowMap = flowMap + (name -> (flowFactory.create, order))
+      flowMap = flowMap + (name -> flowFactory.create)
     }
 
-    val inboundDefaults = system.settings.config.getOptionalStringList("squbs.pipeline.streaming.default-inbound-flows")
-    val outboundDefaults = system.settings.config.getOptionalStringList("squbs.pipeline.streaming.default-outbound-flows")
-    new PipelineExtensionImpl(flowMap, inboundDefaults, outboundDefaults)
+    val pre = system.settings.config.getOptionalString("squbs.pipeline.streaming.defaults.pre-flow")
+    val post = system.settings.config.getOptionalString("squbs.pipeline.streaming.defaults.post-flow")
+    new PipelineExtensionImpl(flowMap, pre, post)
   }
 
   override def lookup(): ExtensionId[_ <: Extension] = PipelineExtension

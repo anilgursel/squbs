@@ -80,26 +80,15 @@ class Handler(routes: Agent[Seq[(Path, ActorWrapper, PipelineSetting)]])(implici
 
       val routesMerge = b.add(Merge[RequestContext](actorWrappers.size + 1))
       val rss = b.add(RouteSelectorStage(paths, pathExtractor, pathMatcher))
+
       actorWrappers.zipWithIndex foreach { case (aw, i) =>
-        val routeFlow = b.add(Flow[RequestContext].mapAsync(akkaHttpConfig.getInt("server.pipelining-limit")) {
+        val routeFlow = Flow[RequestContext].mapAsync(akkaHttpConfig.getInt("server.pipelining-limit")) {
           rc => asyncHandler(aw)(rc.request) map (httpResponse => rc.copy(response = Option(httpResponse)))
-        })
+        }
 
-        // Bypass route flow if HttpResponse is already set in inbound flow
-        val merge = b.add(Merge[RequestContext](2))
-        val broadCast = b.add(Broadcast[RequestContext](2))
-        broadCast.out(0).filter(_.response.isEmpty) ~> routeFlow ~> merge.in(0)
-        broadCast.out(1).filter(_.response.nonEmpty)             ~> merge.in(1)
-
-        val bypassableRouteFlow = FlowShape(broadCast.in, merge.out)
-
-        val flows = pipelineExtension.getFlows(pipelineSettings(i))
-
-        flows match {
-          case (Some(inbound), Some(outbound)) => rss.out(i) ~> inbound ~> bypassableRouteFlow ~> outbound ~> routesMerge
-          case (Some(inbound), None) => rss.out(i) ~> inbound ~> bypassableRouteFlow ~> routesMerge
-          case (None, Some(outbound)) => rss.out(i) ~> bypassableRouteFlow ~> outbound ~> routesMerge
-          case (None, None) => rss.out(i) ~> bypassableRouteFlow ~> routesMerge
+        pipelineExtension.getFlow(pipelineSettings(i)) match {
+          case Some(pipeline) => rss.out(i) ~> pipeline.join(routeFlow) ~> routesMerge
+          case None => rss.out(i) ~> routeFlow ~> routesMerge
         }
       }
 
