@@ -21,6 +21,8 @@ import akka.actor._
 import akka.stream.scaladsl._
 import com.typesafe.config.ConfigObject
 
+import scala.annotation.tailrec
+
 trait PipelineFlowFactory {
 
   def create: BidiFlow[RequestContext, RequestContext, RequestContext, RequestContext, NotUsed]
@@ -50,15 +52,16 @@ class PipelineExtensionImpl(flowMap: Map[String, PipelineFlow],
       throw new IllegalArgumentException(s"Pipeline contains unknown flows: [${flowNames.mkString(",")}]")
     }
 
-    def connectFlows(flowList: List[PipelineFlow]): PipelineFlow = {
+    @tailrec
+    def connectFlows(currentFlow: PipelineFlow, flowList: List[PipelineFlow]): PipelineFlow = {
 
       flowList match {
-        case head :: Nil => head
-        case head :: tail => head.atop(connectFlows(tail))
+        case Nil => currentFlow
+        case head :: tail => connectFlows(currentFlow atop head, tail)
       }
     }
 
-    Some(connectFlows(flows))
+    Some(connectFlows(flows.head, flows.tail))
   }
 }
 

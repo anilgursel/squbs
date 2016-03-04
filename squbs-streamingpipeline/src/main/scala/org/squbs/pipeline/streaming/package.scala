@@ -29,12 +29,12 @@ package object streaming {
 
   implicit class AbortableBidiFlow(val underlying: PipelineFlow) {
 
-    def withAbortable: PipelineFlow = {
-      underlying.atop(abortable)
+    def abortable: PipelineFlow = {
+      underlying.atop(aborterFlow)
     }
   }
 
-  val abortable = BidiFlow.fromGraph(GraphDSL.create() { implicit b =>
+  val aborterFlow = BidiFlow.fromGraph(GraphDSL.create() { implicit b =>
     import GraphDSL.Implicits._
 
     val bCast = b.add(Broadcast[RequestContext](2))
