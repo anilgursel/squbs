@@ -77,7 +77,7 @@ class ServiceRegistry(val log: LoggingAdapter) extends ServiceRegistryBase[Path]
 
 
     val statsHolder = new StatsHolder
-    val handler = Handler(listenerRoutes(name))
+    val handler = Handler(listenerRoutes(name), localPort)
 
     serverFlow.to(Sink.foreach { conn =>
 

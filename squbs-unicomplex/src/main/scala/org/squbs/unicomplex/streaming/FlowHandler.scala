@@ -29,12 +29,14 @@ import akka.pattern._
 
 object Handler {
 
-  def apply(routes: Agent[Seq[(Path, ActorWrapper, PipelineSetting)]])(implicit system: ActorSystem): Handler = {
-    new Handler(routes)
+  def apply(routes: Agent[Seq[(Path, ActorWrapper, PipelineSetting)]], localPort: Option[Int])
+           (implicit system: ActorSystem): Handler = {
+    new Handler(routes, localPort)
   }
 }
 
-class Handler(routes: Agent[Seq[(Path, ActorWrapper, PipelineSetting)]])(implicit system: ActorSystem) {
+class Handler(routes: Agent[Seq[(Path, ActorWrapper, PipelineSetting)]], localPort: Option[Int])
+             (implicit system: ActorSystem) {
 
   val akkaHttpConfig = system.settings.config.getConfig("akka.http")
 
@@ -117,7 +119,11 @@ class Handler(routes: Agent[Seq[(Path, ActorWrapper, PipelineSetting)]])(implici
 
       val responseFlow = b.add(Flow[RequestContext].map { _.response getOrElse notFoundHttpResponse }) // TODO This actually might be a 500..
 
-      val zip = b.add(ZipWith[HttpRequest, Int, RequestContext]{ (hr, po) => RequestContext(hr, po)})
+      val zipF = localPort map {
+        port => (hr: HttpRequest, po: Int) => RequestContext(hr, po).addRequestHeaders(LocalPortHeader(port))
+      } getOrElse { (hr: HttpRequest, po: Int) => RequestContext(hr, po) }
+
+      val zip = b.add(ZipWith[HttpRequest, Int, RequestContext](zipF))
 
       // Generate id for each request to order requests for  Http Pipelining
       Source.fromIterator(() => Iterator.from(0)) ~> zip.in1
