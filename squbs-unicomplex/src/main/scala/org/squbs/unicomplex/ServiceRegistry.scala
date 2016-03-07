@@ -380,26 +380,6 @@ class RejectRoute extends RouteDefinition {
   val route: Route = reject
 }
 
-object WebContext {
-
-  private[unicomplex] val localContext = new ThreadLocal[Option[String]] {
-    override def initialValue(): Option[String] = None
-  }
-
-  def createWithContext[T](webContext: String)(fn: => T): T = {
-    localContext.set(Some(webContext))
-    val r = fn
-    localContext.set(None)
-    r
-
-  }
-}
-
-
-trait WebContext {
-  protected final val webContext: String = WebContext.localContext.get.get
-}
-
 /**
  * Other media types beyond what Spray supports.
  */

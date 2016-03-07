@@ -27,14 +27,37 @@ import org.squbs.pipeline.streaming.{PipelineSetting, PipelineExtension, Request
 import org.squbs.unicomplex.ActorWrapper
 import akka.pattern._
 
+import scala.annotation.tailrec
+
 object Handler {
 
-  def apply(routes: Agent[Seq[(Path, ActorWrapper, PipelineSetting)]])(implicit system: ActorSystem): Handler = {
-    new Handler(routes)
+  def apply(routes: Agent[Seq[(Path, ActorWrapper, PipelineSetting)]], localPort: Option[Int])
+           (implicit system: ActorSystem): Handler = {
+    new Handler(routes, localPort)
+  }
+
+  def pathMatch(path: Path, target: Path): Boolean = {
+    if(path.length < target.length) { false }
+    else {
+      @tailrec
+      def innerMatch(path: Path, target:Path):Boolean = {
+        if (target.isEmpty) { true }
+        else {
+          target.head.equals(path.head) match {
+            case true => innerMatch(path.tail, target.tail)
+            case _ => false
+          }
+        }
+      }
+      innerMatch(path, target)
+    }
   }
 }
 
-class Handler(routes: Agent[Seq[(Path, ActorWrapper, PipelineSetting)]])(implicit system: ActorSystem) {
+class Handler(routes: Agent[Seq[(Path, ActorWrapper, PipelineSetting)]], localPort: Option[Int])
+             (implicit system: ActorSystem) {
+
+  import Handler._
 
   val akkaHttpConfig = system.settings.config.getConfig("akka.http")
 
@@ -45,20 +68,6 @@ class Handler(routes: Agent[Seq[(Path, ActorWrapper, PipelineSetting)]])(implici
   import system.dispatcher
 
   def normPath(path: Path): Path = if (path.startsWithSlash) path.tail else path
-
-  def pathMatch(path: Path, target: Path): Boolean = {
-    if(path.length < target.length) false
-    else {
-      def innerMatch(path: Path, target:Path):Boolean = {
-        if (target.isEmpty) true
-        else target.head.equals(path.head) match {
-          case true => innerMatch(path.tail, target.tail)
-          case _ => false
-        }
-      }
-      innerMatch(path, target)
-    }
-  }
 
   // TODO FIX ME - Discuss with Akara and Qian.
   // I am not sure what exactly the timeout should be set to.  One option is to use akka.http.server.request-timeout; however,
@@ -117,7 +126,11 @@ class Handler(routes: Agent[Seq[(Path, ActorWrapper, PipelineSetting)]])(implici
 
       val responseFlow = b.add(Flow[RequestContext].map { _.response getOrElse notFoundHttpResponse }) // TODO This actually might be a 500..
 
-      val zip = b.add(ZipWith[HttpRequest, Int, RequestContext]{ (hr, po) => RequestContext(hr, po)})
+      val zipF = localPort map {
+        port => (hr: HttpRequest, po: Int) => RequestContext(hr, po).addRequestHeaders(LocalPortHeader(port))
+      } getOrElse { (hr: HttpRequest, po: Int) => RequestContext(hr, po) }
+
+      val zip = b.add(ZipWith[HttpRequest, Int, RequestContext](zipF))
 
       // Generate id for each request to order requests for  Http Pipelining
       Source.fromIterator(() => Iterator.from(0)) ~> zip.in1

@@ -18,10 +18,9 @@ package org.squbs.unicomplex
 
 import javax.net.ssl.SSLContext
 import akka.actor.Actor._
-import akka.actor.{Props, ActorRef, ActorContext}
+import akka.actor.{ActorRef, ActorContext}
 import akka.agent.Agent
 import akka.event.LoggingAdapter
-import akka.io.IO
 import com.typesafe.config.Config
 import org.squbs.pipeline.streaming.PipelineSetting
 import org.squbs.unicomplex.ConfigUtil._
@@ -157,6 +156,24 @@ trait ServiceRegistryBase[A] {
   }
 }
 
+object WebContext {
+
+  private[unicomplex] val localContext = new ThreadLocal[Option[String]] {
+    override def initialValue(): Option[String] = None
+  }
+
+  def createWithContext[T](webContext: String)(fn: => T): T = {
+    localContext.set(Some(webContext))
+    val r = fn
+    localContext.set(None)
+    r
+
+  }
+}
+
+trait WebContext {
+  protected final val webContext: String = WebContext.localContext.get.get
+}
 
 class ListenerBean[A](listenerRoutes: Map[String, Agent[Seq[(A, ActorWrapper, PipelineSetting)]]]) extends ListenerMXBean {
 
