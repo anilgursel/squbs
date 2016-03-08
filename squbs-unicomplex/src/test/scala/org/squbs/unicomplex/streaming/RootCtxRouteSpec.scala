@@ -17,31 +17,22 @@
 package org.squbs.unicomplex.streaming
 
 import akka.actor.ActorSystem
-import akka.io.IO
+import akka.http.scaladsl.server.Route
+import akka.http.scaladsl.server.Directives._
+import akka.stream.ActorMaterializer
 import akka.testkit.{ImplicitSender, TestKit}
 import com.typesafe.config.ConfigFactory
 import org.scalatest.{BeforeAndAfterAll, FlatSpecLike, Matchers}
 import org.squbs.lifecycle.GracefulStop
 import org.squbs.unicomplex.Timeouts.awaitMax
 import org.squbs.unicomplex.{Unicomplex, JMX, UnicomplexBoot}
-import spray.can.Http
-import spray.http._
-import spray.routing.Directives._
-import spray.routing.Route
 import spray.util.Utils
 
+import scala.concurrent.Await
+
 object RootCtxRouteSpec{
-  /*
-  cube-name = org.squbs.unicomplex.test.RootRoute
-  cube-version = "0.0.1"
-  squbs-services = [
-      {
-          class-name = org.squbs.unicomplex.RootRoute
-          web-context = ""
-      }
-  ]
-   */
-  val classPaths = Array(getClass.getClassLoader.getResource("classpaths/RootCtxRoute").getPath)
+
+  val classPaths = Array(getClass.getClassLoader.getResource("classpaths/streaming/RootCtxRoute").getPath)
 
   val (_, port) = Utils.temporaryServerHostnameAndPort()
 
@@ -51,6 +42,7 @@ object RootCtxRouteSpec{
        |squbs {
        |  actorsystem-name = rootCtxRouteSpec
        |  ${JMX.prefixConfig} = true
+       |  experimental-mode-on = true
        |}
     """.stripMargin
   )
@@ -64,6 +56,8 @@ object RootCtxRouteSpec{
 class RootCtxRouteSpec extends TestKit(
   RootCtxRouteSpec.boot.actorSystem) with FlatSpecLike with Matchers with ImplicitSender with BeforeAndAfterAll {
 
+  implicit val am = ActorMaterializer()
+
   val port = system.settings.config getInt "default-listener.bind-port"
 
   override def afterAll() {
@@ -71,16 +65,11 @@ class RootCtxRouteSpec extends TestKit(
   }
 
   "Route" should "handle request with empty web-context" in {
-    IO(Http) ! HttpRequest(HttpMethods.GET, Uri(s"http://127.0.0.1:$port/ping"))
-    within(awaitMax) {
-      val response = expectMsgType[HttpResponse]
-      response.status should be(StatusCodes.OK)
-      response.entity.asString should be("pong")
-    }
+    Await.result(entityAsString(s"http://127.0.0.1:$port/ping"), awaitMax) should be("pong")
   }
 }
 
-class RootRoute extends org.squbs.unicomplex.RouteDefinition {
+class RootRoute extends RouteDefinition {
   override def route: Route = path("ping") {
     complete{"pong"}
   }
