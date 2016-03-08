@@ -186,10 +186,10 @@ private[unicomplex] class RouteActor(webContext: String, clazz: Class[RouteDefin
         RouteDefinition.startRoutes(new RejectRoute)
     }
 
-
+  // TODO Hold on..  Why do we directly need a materializer here..  Should be passed down..
   implicit val am = ActorMaterializer()
   implicit val rejectionHandler:RejectionHandler = routeDef.rejectionHandler.getOrElse(RejectionHandler.default)
-  implicit val exceptionHandler:ExceptionHandler = routeDef.exceptionHandler.getOrElse(null)
+  implicit val exceptionHandler:ExceptionHandler = routeDef.exceptionHandler.getOrElse(PartialFunction.empty[Throwable, Route])
 
   lazy val route = if (webContext.nonEmpty) {
     PathDirectives.pathPrefix(PathMatchers.separateOnSlashes(webContext)) {routeDef.route}
@@ -201,7 +201,7 @@ private[unicomplex] class RouteActor(webContext: String, clazz: Class[RouteDefin
   import akka.pattern.pipe
   import context.dispatcher
 
-  def receive = {
+  def receive: Receive = {
     case request: HttpRequest =>
       val origSender = sender()
       Route.asyncHandler(route).apply(request) pipeTo origSender
