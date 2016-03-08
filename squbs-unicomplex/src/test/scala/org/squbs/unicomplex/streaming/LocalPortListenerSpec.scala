@@ -17,12 +17,9 @@
 package org.squbs.unicomplex.streaming
 
 import akka.actor.ActorSystem
-import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.{Uri, HttpRequest}
 import akka.http.scaladsl.server.{Route, Directives}
 import akka.stream.ActorMaterializer
 import akka.testkit.TestKit
-import akka.util.ByteString
 import com.typesafe.config.ConfigFactory
 import org.scalatest.{BeforeAndAfterAll, FlatSpecLike, Matchers}
 import org.squbs.lifecycle.GracefulStop
@@ -95,23 +92,17 @@ object LocalPortListenerSpecActorSystem {
 class LocalPortListenerSpec extends TestKit(LocalPortListenerSpecActorSystem.boot.actorSystem)
     with FlatSpecLike with BeforeAndAfterAll with Matchers {
 
-  import system.dispatcher
   implicit val am = ActorMaterializer()
   
   val (port1, port2, port3) = LocalPortListenerSpecActorSystem.getPort
 
-  val httpRequestResponse = (uri: String) => Http().singleRequest(HttpRequest(uri = Uri(uri))) flatMap {
-    response => response.entity.dataBytes.runFold(ByteString(""))(_ ++ _) map(bs => bs.utf8String.toInt) }
-
   it should "patch local port well on local-port-header = true" in {
-
-    Await.result(httpRequestResponse(s"http://127.0.0.1:$port1/localport"), awaitMax) should be (port1)
+    Await.result(entityAsInt(s"http://127.0.0.1:$port1/localport"), awaitMax) should be (port1)
   }
 
   it should "not patch local port header if local-port-header is false or absent" in {
-
-    Await.result(httpRequestResponse(s"http://127.0.0.1:$port2/localport"), awaitMax) should be (0)
-    Await.result(httpRequestResponse(s"http://127.0.0.1:$port3/localport"), awaitMax) should be (0)
+    Await.result(entityAsInt(s"http://127.0.0.1:$port2/localport"), awaitMax) should be (0)
+    Await.result(entityAsInt(s"http://127.0.0.1:$port3/localport"), awaitMax) should be (0)
   }
 
   override protected def afterAll(): Unit = {

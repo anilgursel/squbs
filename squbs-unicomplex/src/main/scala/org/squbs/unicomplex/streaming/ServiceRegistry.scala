@@ -16,8 +16,6 @@
 
 package org.squbs.unicomplex.streaming
 
-import javax.net.ssl.SSLContext
-
 import akka.actor.Actor._
 import akka.actor.SupervisorStrategy.Escalate
 import akka.actor._
@@ -28,8 +26,8 @@ import akka.http.scaladsl.model.Uri.Path
 import akka.http.scaladsl.server.directives.PathDirectives
 import akka.http.scaladsl.server._
 import akka.http.scaladsl.{ConnectionContext, Http}
-import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
-import akka.stream.ActorMaterializer
+import akka.http.scaladsl.model.HttpRequest
+import akka.stream.{BindFailedException, ActorMaterializer}
 import akka.stream.TLSClientAuth.{Want, Need}
 import akka.stream.scaladsl.Sink
 import com.typesafe.config.Config
@@ -37,11 +35,10 @@ import org.squbs.pipeline.streaming.PipelineSetting
 import org.squbs.unicomplex._
 import org.squbs.unicomplex.streaming.StatsSupport.StatsHolder
 
-import scala.concurrent.{Future, ExecutionContext}
 import scala.util.Failure
 import scala.util.Success
 import akka.pattern.pipe
-import scala.concurrent.duration._
+import akka.actor.Status.{Failure => ActorFailure}
 
 /**
   * Akka HTTP based [[ServiceRegistryBase]] implementation.
@@ -94,9 +91,10 @@ class ServiceRegistry(val log: LoggingAdapter) extends ServiceRegistryBase[Path]
         serverBindigs = serverBindigs + (name -> Some(sb))
         notifySender ! Ack
         uniSelf ! HttpBindSuccess
-      case _: Exception =>
+      case ActorFailure(ex) if ex.isInstanceOf[BindFailedException] =>
         serverBindigs = serverBindigs + (name -> None)
         log.error(s"Failed to bind listener $name. Cleaning up. System may not function properly.")
+        notifySender ! Ack
         uniSelf ! HttpBindFailed
     }
   }

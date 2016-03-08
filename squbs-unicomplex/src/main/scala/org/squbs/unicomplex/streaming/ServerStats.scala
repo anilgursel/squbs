@@ -22,7 +22,7 @@ import org.squbs.unicomplex.streaming.StatsSupport.StatsHolder
 
 class ServerStats(name: String, statsHolder: StatsHolder) extends ServerStatsMXBean {
 
-  val df = new java.text.SimpleDateFormat("HH:mm:ss:SSS")
+  val df = new java.text.SimpleDateFormat("HH:mm:ss.SSS")
 
   override def getListenerName: String = name
 
