@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.squbs.unicomplex.streaming.unicomplex.stashcube
+package org.squbs.unicomplex.streaming.stashcube
 
 import akka.actor.{Actor, Stash}
 import spray.http.HttpMethods._

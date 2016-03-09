@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.squbs.unicomplex.streaming.unicomplex.dummycube
+package org.squbs.unicomplex.streaming.dummycube
 
 import akka.actor.{Props, ActorLogging, Actor}
 import org.squbs.unicomplex.{PrependedMsg, Constants, AppendedMsg, EchoMsg}

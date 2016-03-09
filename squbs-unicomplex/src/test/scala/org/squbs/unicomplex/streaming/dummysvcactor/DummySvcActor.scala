@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.squbs.unicomplex.streaming.unicomplex.dummysvcactor
+package org.squbs.unicomplex.streaming.dummysvcactor
 
 import akka.actor.{ActorRef, Props, ActorLogging, Actor}
 import org.squbs.unicomplex.WebContext

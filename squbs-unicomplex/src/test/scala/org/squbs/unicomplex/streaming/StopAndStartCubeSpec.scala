@@ -29,7 +29,7 @@ import spray.util.Utils
 import scala.util.Try
 
 object StopAndStartCubeSpec {
-  val dummyJarsDir = getClass.getClassLoader.getResource("classpaths").getPath
+  val dummyJarsDir = getClass.getClassLoader.getResource("classpaths/streaming").getPath
 
   val classPaths = Array(
     "DummyCube",
@@ -44,6 +44,7 @@ object StopAndStartCubeSpec {
        |squbs {
        |  actorsystem-name = StopAndStartCubeSpec
        |  ${JMX.prefixConfig} = true
+       |  experimental-mode-on = true
        |}
        |default-listener.bind-port = $port
     """.stripMargin

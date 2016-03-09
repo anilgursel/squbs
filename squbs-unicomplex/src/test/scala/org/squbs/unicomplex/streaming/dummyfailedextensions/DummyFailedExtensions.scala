@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.squbs.unicomplex.streaming.unicomplex.dummyfailedextensions
+package org.squbs.unicomplex.streaming.dummyfailedextensions
 
 import org.squbs.lifecycle.ExtensionLifecycle
 

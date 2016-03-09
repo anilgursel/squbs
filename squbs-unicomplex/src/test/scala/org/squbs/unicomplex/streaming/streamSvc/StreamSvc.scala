@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.squbs.unicomplex.streaming.unicomplex.streamSvc
+package org.squbs.unicomplex.streaming.streamSvc
 
 import akka.actor._
 import spray.http._

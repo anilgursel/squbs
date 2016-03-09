@@ -14,51 +14,52 @@
  * limitations under the License.
  */
 
-package org.squbs.unicomplex.streaming.unicomplex.dummysvc
+package org.squbs.unicomplex.streaming.dummysvc
 
-import org.squbs.unicomplex._
-import akka.actor.{Props, ActorRef, Actor, ActorLogging}
-import spray.routing._
+import akka.http.scaladsl.model.{ContentTypes, HttpEntity, HttpResponse}
+import akka.http.scaladsl.server.{RequestContext, RouteResult, Route, Directives}
+import akka.pattern.ask
 import Directives._
-import spray.http.HttpEntity
-import spray.http.MediaTypes._
-import spray.http.HttpResponse
+import akka.actor.{Props, ActorRef, Actor, ActorLogging}
+import org.squbs.unicomplex._
+import org.squbs.unicomplex.streaming.RouteDefinition
+import Timeouts._
 
 class DummySvc extends RouteDefinition with WebContext {
-  def route = path("msg" / Segment) {param =>
+  def route: Route = path("msg" / Segment) {param =>
     get {ctx =>
-      context.actorOf(Props[DummyClient]).tell(EchoMsg(param), ctx.responder)
+      (context.actorOf(Props(classOf[DummyClient], ctx)) ? EchoMsg(param)).mapTo[RouteResult]
     }
   }
 }
 
 class Dummy2VersionedSvc extends RouteDefinition with WebContext {
-  def route = path("msg" / Segment) {param =>
+  def route: Route = path("msg" / Segment) {param =>
     get {ctx =>
-      context.actorOf(Props[DummyClient]).tell(EchoMsg(param), ctx.responder)
+      (context.actorOf(Props(classOf[DummyClient], ctx)) ? EchoMsg(param)).mapTo[RouteResult]
     }
   }
 }
 
 class Dummy2Svc extends RouteDefinition with WebContext {
-  def route = path("msg" / Segment) {param =>
+  def route: Route = path("msg" / Segment) {param =>
     get {ctx =>
-      context.actorOf(Props[DummyClient]).tell(EchoMsg(param.reverse), ctx.responder)
+      (context.actorOf(Props(classOf[DummyClient], ctx)) ? EchoMsg(param.reverse)).mapTo[RouteResult]
     }
   }
 }
 
-private class DummyClient extends Actor with ActorLogging {
+private class DummyClient(ctx: RequestContext) extends Actor with ActorLogging {
 
   private def receiveMsg(responder: ActorRef): Receive = {
 
     case AppendedMsg(appendedMsg) => context.actorSelection("/user/DummyCube/Prepender") ! EchoMsg(appendedMsg)
 
-    case PrependedMsg(prependedMsg) => responder ! HttpResponse(entity = HttpEntity(`text/plain`, prependedMsg))
+    case PrependedMsg(prependedMsg) => ctx.complete(HttpResponse(entity = HttpEntity(ContentTypes.`text/plain(UTF-8)`, prependedMsg)))
       context.stop(self)
   }
 
-  def receive = {
+  def receive: Receive = {
     case msg: EchoMsg => context.actorSelection("/user/DummyCube/Appender") ! msg
       context.become(receiveMsg(sender()))
   }

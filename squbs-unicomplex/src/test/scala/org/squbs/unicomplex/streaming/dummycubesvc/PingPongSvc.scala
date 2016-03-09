@@ -14,43 +14,46 @@
  * limitations under the License.
  */
 
-package org.squbs.unicomplex.streaming.unicomplex.dummycubesvc
+package org.squbs.unicomplex.streaming.dummycubesvc
 
-import org.squbs.unicomplex.{Ping, Pong, RouteDefinition}
-import spray.routing.Directives._
+import akka.http.scaladsl.model.{ContentTypes, HttpEntity, HttpResponse}
+import akka.http.scaladsl.server.Directives._
+import akka.http.scaladsl.server.{RequestContext, RouteResult, Route}
+import akka.pattern.ask
+import org.squbs.unicomplex.streaming.RouteDefinition
+import org.squbs.unicomplex.{Ping, Pong}
 import akka.actor.{ActorRef, Actor, ActorLogging, Props}
 import org.squbs.lifecycle.{GracefulStop, GracefulStopHelper}
-import spray.http.{HttpEntity, HttpResponse}
-import spray.http.MediaTypes._
+import org.squbs.unicomplex.Timeouts._
 
 class PingPongSvc extends RouteDefinition{
 
-  def route = path("ping") {
+  def route: Route = path("ping") {
     get {ctx =>
-      context.actorOf(Props[PingPongClient]).tell("ping", ctx.responder)
+      (context.actorOf(Props(classOf[PingPongClient], ctx)) ? "ping").mapTo[RouteResult]
     }
   } ~
   path("pong") {
     get {ctx =>
-      context.actorOf(Props[PingPongClient]).tell("pong", ctx.responder)
+      (context.actorOf(Props(classOf[PingPongClient], ctx)) ? "pong").mapTo[RouteResult]
     }
   }
 
 }
 
-private class PingPongClient extends Actor with ActorLogging {
+private class PingPongClient(ctx: RequestContext) extends Actor with ActorLogging {
 
   private val pingPongActor = context.actorSelection("/user/DummyCubeSvc/PingPongPlayer")
 
   def ping(responder: ActorRef): Receive = {
-    case Pong => responder ! HttpResponse(entity = HttpEntity(`text/plain`, Pong.toString))
+    case Pong => ctx.complete(HttpResponse(entity = HttpEntity(ContentTypes.`text/plain(UTF-8)`, Pong.toString)))
   }
 
   def pong(responder: ActorRef): Receive = {
-    case Ping => responder ! HttpResponse(entity = HttpEntity(`text/plain`, Ping.toString))
+    case Ping => responder ! HttpResponse(entity = HttpEntity(ContentTypes.`text/plain(UTF-8)`, Ping.toString))
   }
 
-  def receive = {
+  def receive: Receive = {
     case "ping" => pingPongActor ! Ping
       context.become(ping(sender()))
 
