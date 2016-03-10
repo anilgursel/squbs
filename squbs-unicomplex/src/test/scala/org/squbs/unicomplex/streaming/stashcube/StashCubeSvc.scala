@@ -17,9 +17,9 @@
 package org.squbs.unicomplex.streaming.stashcube
 
 import akka.actor.{Actor, Stash}
-import spray.http.HttpMethods._
-import spray.http.StatusCodes._
-import spray.http.{HttpEntity, HttpRequest, HttpResponse}
+import akka.http.scaladsl.model._
+import akka.stream.ActorMaterializer
+import akka.util.ByteString
 
 import scala.collection.mutable.ListBuffer
 
@@ -27,25 +27,28 @@ class StashCubeSvc extends Actor with Stash {
 
 	private val msgList = new ListBuffer[String]()
 
-	override def receive = {
-		case req: HttpRequest if req.method == POST =>
+  implicit val am = ActorMaterializer()
+  import context.dispatcher
+
+	override def receive: Receive = {
+		case req@HttpRequest(HttpMethods.POST, _, _, _, _) =>
 			stash()
-			val resp = HttpResponse(status = Accepted, entity = HttpEntity("Stashed away!"))
+			val resp = HttpResponse(status = StatusCodes.Accepted, entity = HttpEntity("Stashed away!"))
       sender() ! resp
-		case req: HttpRequest if req.method == PUT =>
+		case req@HttpRequest(HttpMethods.PUT, _, _, _, _) =>
 			context.become(report)
-      val resp = HttpResponse(status = Created, entity = HttpEntity("Un-stashed"))
+      val resp = HttpResponse(status = StatusCodes.Created, entity = HttpEntity("Un-stashed"))
       sender() ! resp
       unstashAll()
-		case req: HttpRequest if req.method == GET =>
+		case req@HttpRequest(HttpMethods.GET, _, _, _, _) =>
 			val resp = HttpResponse(entity = msgList.toSeq.toString())
 			sender() ! resp
 	}
 
 	def report: Receive = {
-		case req: HttpRequest if req.method == POST =>
-			msgList.append(req.entity.asString)
-		case req: HttpRequest if req.method == GET =>
+		case req@HttpRequest(HttpMethods.POST, _, _, _, _) =>
+			req.entity.dataBytes.runFold(ByteString(""))(_ ++ _) map(_.utf8String) foreach(msgList.append(_))
+		case req@HttpRequest(HttpMethods.GET, _, _, _, _) =>
 			val resp = HttpResponse(entity = msgList.toSeq.toString())
 			sender() ! resp
 	}

@@ -16,8 +16,7 @@
 
 package org.squbs.unicomplex.streaming.dummysvc
 
-import akka.http.scaladsl.model.{ContentTypes, HttpEntity, HttpResponse}
-import akka.http.scaladsl.server.{RequestContext, RouteResult, Route, Directives}
+import akka.http.scaladsl.server.{Route, Directives}
 import akka.pattern.ask
 import Directives._
 import akka.actor.{Props, ActorRef, Actor, ActorLogging}
@@ -27,40 +26,48 @@ import Timeouts._
 
 class DummySvc extends RouteDefinition with WebContext {
   def route: Route = path("msg" / Segment) {param =>
-    get {ctx =>
-      (context.actorOf(Props(classOf[DummyClient], ctx)) ? EchoMsg(param)).mapTo[RouteResult]
+    get {
+      onSuccess((context.actorOf(Props(classOf[DummyClient])) ? EchoMsg(param)).mapTo[String]) {
+        case value => complete(value)
+      }
     }
   }
 }
 
 class Dummy2VersionedSvc extends RouteDefinition with WebContext {
   def route: Route = path("msg" / Segment) {param =>
-    get {ctx =>
-      (context.actorOf(Props(classOf[DummyClient], ctx)) ? EchoMsg(param)).mapTo[RouteResult]
+    get {
+      onSuccess((context.actorOf(Props(classOf[DummyClient])) ? EchoMsg(param)).mapTo[String]) {
+        case value => complete(value)
+      }
     }
   }
 }
 
 class Dummy2Svc extends RouteDefinition with WebContext {
   def route: Route = path("msg" / Segment) {param =>
-    get {ctx =>
-      (context.actorOf(Props(classOf[DummyClient], ctx)) ? EchoMsg(param.reverse)).mapTo[RouteResult]
+    get {
+      onSuccess((context.actorOf(Props(classOf[DummyClient])) ? EchoMsg(param.reverse)).mapTo[String]) {
+        case value => complete(value)
+      }
     }
   }
 }
 
-private class DummyClient(ctx: RequestContext) extends Actor with ActorLogging {
+private class DummyClient extends Actor with ActorLogging {
 
   private def receiveMsg(responder: ActorRef): Receive = {
 
     case AppendedMsg(appendedMsg) => context.actorSelection("/user/DummyCube/Prepender") ! EchoMsg(appendedMsg)
 
-    case PrependedMsg(prependedMsg) => ctx.complete(HttpResponse(entity = HttpEntity(ContentTypes.`text/plain(UTF-8)`, prependedMsg)))
+    case PrependedMsg(prependedMsg) =>
+      responder ! prependedMsg
       context.stop(self)
   }
 
   def receive: Receive = {
-    case msg: EchoMsg => context.actorSelection("/user/DummyCube/Appender") ! msg
+    case msg: EchoMsg =>
+      context.actorSelection("/user/DummyCube/Appender") ! msg
       context.become(receiveMsg(sender()))
   }
 }

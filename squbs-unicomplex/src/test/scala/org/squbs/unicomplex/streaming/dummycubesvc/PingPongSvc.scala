@@ -21,7 +21,7 @@ import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.{RequestContext, RouteResult, Route}
 import akka.pattern.ask
 import org.squbs.unicomplex.streaming.RouteDefinition
-import org.squbs.unicomplex.{Ping, Pong}
+import org.squbs.unicomplex.{EchoMsg, Ping, Pong}
 import akka.actor.{ActorRef, Actor, ActorLogging, Props}
 import org.squbs.lifecycle.{GracefulStop, GracefulStopHelper}
 import org.squbs.unicomplex.Timeouts._
@@ -29,28 +29,32 @@ import org.squbs.unicomplex.Timeouts._
 class PingPongSvc extends RouteDefinition{
 
   def route: Route = path("ping") {
-    get {ctx =>
-      (context.actorOf(Props(classOf[PingPongClient], ctx)) ? "ping").mapTo[RouteResult]
+    get {
+      onSuccess((context.actorOf(Props(classOf[PingPongClient])) ? "ping").mapTo[String]) {
+        case value => complete(value)
+      }
     }
   } ~
   path("pong") {
-    get {ctx =>
-      (context.actorOf(Props(classOf[PingPongClient], ctx)) ? "pong").mapTo[RouteResult]
+    get {
+      onSuccess((context.actorOf(Props(classOf[PingPongClient])) ? "pong").mapTo[String]) {
+        case value => complete(value)
+      }
     }
   }
 
 }
 
-private class PingPongClient(ctx: RequestContext) extends Actor with ActorLogging {
+private class PingPongClient extends Actor with ActorLogging {
 
   private val pingPongActor = context.actorSelection("/user/DummyCubeSvc/PingPongPlayer")
 
   def ping(responder: ActorRef): Receive = {
-    case Pong => ctx.complete(HttpResponse(entity = HttpEntity(ContentTypes.`text/plain(UTF-8)`, Pong.toString)))
+    case Pong => responder ! Pong.toString
   }
 
   def pong(responder: ActorRef): Receive = {
-    case Ping => responder ! HttpResponse(entity = HttpEntity(ContentTypes.`text/plain(UTF-8)`, Ping.toString))
+    case Ping => responder ! Ping.toString
   }
 
   def receive: Receive = {

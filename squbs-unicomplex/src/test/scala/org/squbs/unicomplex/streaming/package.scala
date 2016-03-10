@@ -18,7 +18,7 @@ package org.squbs.unicomplex
 
 import akka.actor.ActorSystem
 import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.{HttpResponse, Uri, HttpRequest}
+import akka.http.scaladsl.model._
 import akka.stream.ActorMaterializer
 import akka.util.ByteString
 
@@ -29,7 +29,8 @@ package object streaming {
   def entityAsString(uri: String)(implicit am: ActorMaterializer, system: ActorSystem): Future[String] = {
     import system.dispatcher
     get(uri) flatMap {
-      r => r.entity.dataBytes.runFold(ByteString(""))(_ ++ _) map(_.utf8String) }
+      r => r.entity.dataBytes.runFold(ByteString(""))(_ ++ _) map(_.utf8String)
+    }
   }
 
   def entityAsInt(uri: String)(implicit am: ActorMaterializer, system: ActorSystem): Future[Int] = {
@@ -39,5 +40,13 @@ package object streaming {
 
   def get(uri: String)(implicit am: ActorMaterializer, system: ActorSystem): Future[HttpResponse] = {
     Http().singleRequest(HttpRequest(uri = Uri(uri)))
+  }
+
+  def post(uri: String, e: RequestEntity)(implicit am: ActorMaterializer, system: ActorSystem): Future[HttpResponse] = {
+    Http().singleRequest(HttpRequest(method = HttpMethods.POST, uri = Uri(uri), entity = e))
+  }
+
+  def put(uri: String)(implicit am: ActorMaterializer, system: ActorSystem): Future[HttpResponse] = {
+    Http().singleRequest(HttpRequest(method = HttpMethods.PUT, uri = Uri(uri)))
   }
 }
