@@ -222,7 +222,7 @@ object RouteDefinition {
   }
 }
 
-trait RouteDefinition {
+trait RouteDefinition extends Directives {
   protected implicit final val context: ActorContext = RouteDefinition.localContext.get.get
   implicit final lazy val self = context.self
 
@@ -235,6 +235,5 @@ trait RouteDefinition {
 
 class RejectRoute extends RouteDefinition {
 
-  import akka.http.scaladsl.server.directives.RouteDirectives.reject
   val route: Route = reject
 }
