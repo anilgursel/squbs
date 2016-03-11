@@ -32,7 +32,7 @@ object RootCtxRouteSpec{
 
   val classPaths = Array(getClass.getClassLoader.getResource("classpaths/streaming/RootCtxRoute").getPath)
 
-  val (_, port) = temporaryServerHostnameAndPort()
+  val (_, _, port) = temporaryServerHostnameAndPort()
 
   val config = ConfigFactory.parseString(
     s"""

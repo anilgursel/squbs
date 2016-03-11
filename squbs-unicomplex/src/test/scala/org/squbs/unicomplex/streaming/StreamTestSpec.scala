@@ -28,7 +28,6 @@ import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
 import org.squbs.lifecycle.GracefulStop
 import org.squbs.unicomplex.{Timeouts, JMX, Unicomplex, UnicomplexBoot}
 import Timeouts._
-import spray.util._
 
 import scala.concurrent.Await
 
@@ -40,7 +39,7 @@ object StreamTestSpec {
     "StreamSvc"
   ) map (dummyJarsDir + "/" + _)
 
-  val (_, port) = temporaryServerHostnameAndPort()
+  val (_, _, port) = temporaryServerHostnameAndPort()
 
   val config = ConfigFactory.parseString(
     s"""

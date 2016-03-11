@@ -33,9 +33,9 @@ import org.squbs.unicomplex.Timeouts._
 import scala.concurrent.Await
 
 object MultiListenerSpecActorSystem {
-  val (_, port1) = temporaryServerHostnameAndPort()
-  val (_, port2) = temporaryServerHostnameAndPort()
-  val (_, port3) = temporaryServerHostnameAndPort()
+  val (_, _, port1) = temporaryServerHostnameAndPort()
+  val (_, _, port2) = temporaryServerHostnameAndPort()
+  val (_, _, port3) = temporaryServerHostnameAndPort()
   
   val config = ConfigFactory.parseString(
       s"""

@@ -37,7 +37,7 @@ object UnicomplexTimeoutSpec {
     "DummySvcActor"
   ) map (dummyJarsDir + "/" + _)
 
-  val (_, port) = temporaryServerHostnameAndPort()
+  val (_, _, port) = temporaryServerHostnameAndPort()
 
   val aConfig = ConfigFactory.parseString(
     s"""

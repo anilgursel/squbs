@@ -51,7 +51,7 @@ object UnicomplexSpec {
     "DummyExtensions.jar"
   ) map (dummyJarsDir + "/" + _)
 
-  val (_, port) = temporaryServerHostnameAndPort()
+  val (_, _, port) = temporaryServerHostnameAndPort()
 
   val config = ConfigFactory.parseString(
     s"""

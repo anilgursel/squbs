@@ -32,7 +32,7 @@ object RouteActorHandlerSpec {
 
   val classPaths = Array(getClass.getClassLoader.getResource("classpaths/streaming/RouteActorHandler").getPath)
 
-  val (_, port) = temporaryServerHostnameAndPort()
+  val (_, _, port) = temporaryServerHostnameAndPort()
 
   val config = ConfigFactory.parseString(
     s"""

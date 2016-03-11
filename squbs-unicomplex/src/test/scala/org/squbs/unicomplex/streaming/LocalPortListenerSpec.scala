@@ -29,9 +29,9 @@ import org.squbs.unicomplex.{Unicomplex, UnicomplexBoot}
 import scala.concurrent.Await
 
 object LocalPortListenerSpecActorSystem {
-  val (_, port1) = temporaryServerHostnameAndPort()
-  val (_, port2) = temporaryServerHostnameAndPort()
-  val (_, port3) = temporaryServerHostnameAndPort()
+  val (_, _, port1) = temporaryServerHostnameAndPort()
+  val (_, _, port2) = temporaryServerHostnameAndPort()
+  val (_, _, port3) = temporaryServerHostnameAndPort()
 
   val config = ConfigFactory.parseString(
       s"""

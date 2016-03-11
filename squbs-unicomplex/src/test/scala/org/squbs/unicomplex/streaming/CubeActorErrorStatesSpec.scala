@@ -33,7 +33,7 @@ object CubeActorErrorStatesSpec{
 
   val classPaths = Array(getClass.getClassLoader.getResource("classpaths/streaming/CubeActorErrorStates").getPath)
 
-  val (_, port) = temporaryServerHostnameAndPort()
+  val (_, _, port) = temporaryServerHostnameAndPort()
 
   val config = ConfigFactory.parseString(
     s"""
