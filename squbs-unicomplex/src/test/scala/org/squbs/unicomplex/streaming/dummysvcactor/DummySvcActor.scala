@@ -18,7 +18,7 @@ package org.squbs.unicomplex.streaming.dummysvcactor
 
 import akka.actor.{ActorRef, ActorLogging, Actor}
 import akka.http.scaladsl.model.Uri.Path
-import akka.http.scaladsl.model.{Uri, StatusCodes, HttpResponse, HttpRequest}
+import akka.http.scaladsl.model._
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.Sink
 import org.squbs.unicomplex.WebContext
@@ -61,7 +61,7 @@ class DummySvcActor extends Actor with WebContext with ActorLogging {
     case req @ HttpRequest(_, Uri(_, _, Path("/dummysvcactor/chunktimeout"), _, _), _, _, _) =>
       req.entity.dataBytes.runWith(Sink.ignore)
 
-    // TODO Missing feature?
+    // TODO Missing feature?  How does this actor get notified if an akka-http request-timeout happens?
 //    case t: Timedout =>
 //      timeoutListeners foreach { _ ! t }
 //

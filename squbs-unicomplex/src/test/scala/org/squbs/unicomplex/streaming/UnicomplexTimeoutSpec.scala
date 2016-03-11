@@ -16,26 +16,23 @@
 
 package org.squbs.unicomplex.streaming
 
-import java.util.concurrent.TimeUnit
-
 import akka.actor.ActorSystem
-import akka.io.IO
+import akka.http.scaladsl.model.StatusCodes
+import akka.stream.ActorMaterializer
 import akka.testkit.{ImplicitSender, TestKit}
 import com.typesafe.config.ConfigFactory
 import org.scalatest._
 import org.scalatest.concurrent.AsyncAssertions
 import org.squbs.lifecycle.GracefulStop
 import org.squbs.unicomplex.{Timeouts, JMX, Unicomplex, UnicomplexBoot}
-import org.squbs.unicomplex.dummysvcactor.RegisterTimeoutHandler
-import spray.can.Http
-import spray.http._
+import Timeouts._
 import spray.util.Utils
 
-import scala.util.Try
+import scala.concurrent.Await
 
 object UnicomplexTimeoutSpec {
 
-  val dummyJarsDir = getClass.getClassLoader.getResource("classpaths").getPath
+  val dummyJarsDir = getClass.getClassLoader.getResource("classpaths/streaming").getPath
 
   val classPaths = Array(
     "DummySvcActor"
@@ -48,11 +45,12 @@ object UnicomplexTimeoutSpec {
        |squbs {
        |  actorsystem-name = unicomplexTimeoutSpec
        |  ${JMX.prefixConfig} = true
+       |  experimental-mode-on = true
        |}
        |default-listener {
        |  bind-port = $port
        |}
-       |spray.can.server {
+       |akka.http.server {
        |  request-timeout = 5s
        |}
      """.stripMargin)
@@ -67,10 +65,7 @@ object UnicomplexTimeoutSpec {
 class UnicomplexTimeoutSpec extends TestKit(UnicomplexTimeoutSpec.boot.actorSystem) with ImplicitSender
     with WordSpecLike with Matchers with BeforeAndAfterAll with AsyncAssertions {
 
-  implicit val timeout: akka.util.Timeout =
-    Try(System.getProperty("test.timeout").toLong) map { millis =>
-      akka.util.Timeout(millis, TimeUnit.MILLISECONDS)
-    } getOrElse Timeouts.askTimeout
+  implicit val am = ActorMaterializer()
 
   val port = system.settings.config getInt "default-listener.bind-port"
 
@@ -81,14 +76,12 @@ class UnicomplexTimeoutSpec extends TestKit(UnicomplexTimeoutSpec.boot.actorSyst
   "Unicomplex" must {
 
     "Cause a timeout event" in {
-      system.settings.config getString "spray.can.server.request-timeout" should be ("5s")
-      system.actorSelection("/user/DummySvcActor/dummysvcactor-DummySvcActor-handler") ! RegisterTimeoutHandler
-      val path = "/dummysvcactor/timeout"
-      IO(Http) ! HttpRequest(HttpMethods.GET, Uri(s"http://127.0.0.1:$port$path"))
-      within(timeout.duration) {
-        val timedOut = expectMsgType[Timedout]
-        timedOut.request should matchPattern { case req: HttpRequest if req.uri.path.toString === path => }
-      }
+      system.settings.config getString "akka.http.server.request-timeout" should be ("5s")
+      val response = Await.result(get(s"http://127.0.0.1:$port/dummysvcactor/timeout"), awaitMax)
+      // TODO This test is useless to me..  Need to explore how we can intervene with timeouts..  Do we need to ?
+      // There may be scenarios, where we may want to do some work when a timeout happens..  So, having a hook
+      // would be useful..
+      response.status should be (StatusCodes.ServiceUnavailable)
     }
   }
 }

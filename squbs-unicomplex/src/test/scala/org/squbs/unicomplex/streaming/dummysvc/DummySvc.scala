@@ -18,7 +18,6 @@ package org.squbs.unicomplex.streaming.dummysvc
 
 import akka.http.scaladsl.server.{Route, Directives}
 import akka.pattern.ask
-import Directives._
 import akka.actor.{Props, ActorRef, Actor, ActorLogging}
 import org.squbs.unicomplex._
 import org.squbs.unicomplex.streaming.RouteDefinition

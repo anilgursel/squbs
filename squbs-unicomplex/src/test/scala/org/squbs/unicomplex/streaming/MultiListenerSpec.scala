@@ -104,7 +104,7 @@ class MultiListenerSpec extends TestKit(MultiListenerSpecActorSystem.boot.actorS
     MultiListenerService.count should be(1)
   }
 
-  it should "register the JMXBean for spray status" in {
+  it should "register the JMXBean for Akka Http status" in {
     import org.squbs.unicomplex.JMX._
     val statsBase = prefix(system) + serverStats
     get(statsBase + "default-listener", "ListenerName").asInstanceOf[String] should be ("default-listener")
