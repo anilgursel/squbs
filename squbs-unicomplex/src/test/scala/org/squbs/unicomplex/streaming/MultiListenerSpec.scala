@@ -135,7 +135,7 @@ class MultiListenerSpec extends TestKit(MultiListenerSpecActorSystem.boot.actorS
   }
 }
 
-class MultiListenerService extends RouteDefinition with Directives {
+class MultiListenerService extends RouteDefinition {
   MultiListenerService.inc()
 
 

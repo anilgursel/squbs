@@ -72,7 +72,7 @@ class RouteActorHandlerSpec extends TestKit(
   }
 }
 
-class Service extends RouteDefinition with Directives {
+class Service extends RouteDefinition {
 
   override def rejectionHandler: Option[RejectionHandler] = Some(RejectionHandler.newBuilder().handle {
     case ServiceRejection => complete("rejected")

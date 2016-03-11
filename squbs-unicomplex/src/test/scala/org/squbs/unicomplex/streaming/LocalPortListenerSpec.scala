@@ -110,7 +110,7 @@ class LocalPortListenerSpec extends TestKit(LocalPortListenerSpecActorSystem.boo
   }
 }
 
-class LocalPortListenerService extends RouteDefinition with Directives {
+class LocalPortListenerService extends RouteDefinition {
 
   override def route: Route = get {
     headerValueByType[LocalPortHeader]()(header => complete(header.value))
