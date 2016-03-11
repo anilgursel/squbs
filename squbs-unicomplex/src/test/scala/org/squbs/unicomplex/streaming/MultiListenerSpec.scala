@@ -29,14 +29,13 @@ import org.scalatest.{BeforeAndAfterAll, FlatSpecLike, Matchers}
 import org.squbs.lifecycle.GracefulStop
 import org.squbs.unicomplex.{UnicomplexBoot, Unicomplex, JMX}
 import org.squbs.unicomplex.Timeouts._
-import spray.util.Utils
 
 import scala.concurrent.Await
 
 object MultiListenerSpecActorSystem {
-  val (_, port1) = Utils.temporaryServerHostnameAndPort()
-  val (_, port2) = Utils.temporaryServerHostnameAndPort()
-  val (_, port3) = Utils.temporaryServerHostnameAndPort()
+  val (_, port1) = temporaryServerHostnameAndPort()
+  val (_, port2) = temporaryServerHostnameAndPort()
+  val (_, port3) = temporaryServerHostnameAndPort()
   
   val config = ConfigFactory.parseString(
       s"""

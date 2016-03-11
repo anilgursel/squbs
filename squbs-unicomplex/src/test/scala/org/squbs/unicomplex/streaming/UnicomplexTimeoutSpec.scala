@@ -26,7 +26,6 @@ import org.scalatest.concurrent.AsyncAssertions
 import org.squbs.lifecycle.GracefulStop
 import org.squbs.unicomplex.{Timeouts, JMX, Unicomplex, UnicomplexBoot}
 import Timeouts._
-import spray.util.Utils
 
 import scala.concurrent.Await
 
@@ -38,7 +37,7 @@ object UnicomplexTimeoutSpec {
     "DummySvcActor"
   ) map (dummyJarsDir + "/" + _)
 
-  val (_, port) = Utils.temporaryServerHostnameAndPort()
+  val (_, port) = temporaryServerHostnameAndPort()
 
   val aConfig = ConfigFactory.parseString(
     s"""

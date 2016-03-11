@@ -24,7 +24,6 @@ import com.typesafe.config.ConfigFactory
 import org.scalatest.{BeforeAndAfterAll, FlatSpecLike, Matchers}
 import org.squbs.lifecycle.GracefulStop
 import org.squbs.unicomplex._
-import spray.util.Utils
 
 import scala.util.Try
 
@@ -37,7 +36,7 @@ object StopAndStartCubeSpec {
     "DummySvc"
   ) map (dummyJarsDir + "/" + _)
 
-  val (_, port) = Utils.temporaryServerHostnameAndPort()
+  val (_, port) = temporaryServerHostnameAndPort()
 
   val config = ConfigFactory.parseString(
     s"""

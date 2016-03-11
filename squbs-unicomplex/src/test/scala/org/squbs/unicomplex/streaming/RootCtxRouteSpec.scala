@@ -18,7 +18,6 @@ package org.squbs.unicomplex.streaming
 
 import akka.actor.ActorSystem
 import akka.http.scaladsl.server.Route
-import akka.http.scaladsl.server.Directives._
 import akka.stream.ActorMaterializer
 import akka.testkit.{ImplicitSender, TestKit}
 import com.typesafe.config.ConfigFactory
@@ -26,7 +25,6 @@ import org.scalatest.{BeforeAndAfterAll, FlatSpecLike, Matchers}
 import org.squbs.lifecycle.GracefulStop
 import org.squbs.unicomplex.Timeouts.awaitMax
 import org.squbs.unicomplex.{Unicomplex, JMX, UnicomplexBoot}
-import spray.util.Utils
 
 import scala.concurrent.Await
 
@@ -34,7 +32,7 @@ object RootCtxRouteSpec{
 
   val classPaths = Array(getClass.getClassLoader.getResource("classpaths/streaming/RootCtxRoute").getPath)
 
-  val (_, port) = Utils.temporaryServerHostnameAndPort()
+  val (_, port) = temporaryServerHostnameAndPort()
 
   val config = ConfigFactory.parseString(
     s"""

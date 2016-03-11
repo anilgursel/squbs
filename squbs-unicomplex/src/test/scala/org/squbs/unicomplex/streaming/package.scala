@@ -16,6 +16,9 @@
 
 package org.squbs.unicomplex
 
+import java.net.InetSocketAddress
+import java.nio.channels.ServerSocketChannel
+
 import akka.actor.ActorSystem
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
@@ -25,6 +28,20 @@ import akka.util.ByteString
 import scala.concurrent.Future
 
 package object streaming {
+
+  def temporaryServerAddress(interface: String = "127.0.0.1"): InetSocketAddress = {
+    val serverSocket = ServerSocketChannel.open()
+    try {
+      serverSocket.socket.bind(new InetSocketAddress(interface, 0))
+      val port = serverSocket.socket.getLocalPort
+      new InetSocketAddress(interface, port)
+    } finally serverSocket.close()
+  }
+
+  def temporaryServerHostnameAndPort(interface: String = "127.0.0.1"): (InetSocketAddress, String, Int) = {
+    val socketAddress = temporaryServerAddress(interface)
+    (socketAddress, socketAddress.getHostName, socketAddress.getPort)
+  }
 
   def extractEntityAsString(response: HttpResponse)
                            (implicit am: ActorMaterializer, system: ActorSystem): Future[String] = {

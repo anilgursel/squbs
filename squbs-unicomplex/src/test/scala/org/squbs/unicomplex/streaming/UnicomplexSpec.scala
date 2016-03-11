@@ -33,7 +33,6 @@ import org.squbs.unicomplex._
 import org.squbs.unicomplex.UnicomplexBoot.StartupType
 import org.squbs.unicomplex.dummyextensions.DummyExtension
 import org.squbs.unicomplex.streaming.dummysvcactor.GetWebContext
-import spray.util.Utils
 
 import scala.concurrent.Await
 import scala.language.postfixOps
@@ -52,7 +51,7 @@ object UnicomplexSpec {
     "DummyExtensions.jar"
   ) map (dummyJarsDir + "/" + _)
 
-  val (_, port) = Utils.temporaryServerHostnameAndPort()
+  val (_, port) = temporaryServerHostnameAndPort()
 
   val config = ConfigFactory.parseString(
     s"""

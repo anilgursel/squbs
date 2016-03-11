@@ -27,7 +27,6 @@ import org.scalatest.concurrent.AsyncAssertions
 import org.squbs.lifecycle.GracefulStop
 import org.squbs.unicomplex.{Unicomplex, UnicomplexBoot, JMX}
 import org.squbs.unicomplex.dummyextensions.DummyExtension
-import spray.util.Utils
 import org.squbs.unicomplex.Timeouts._
 
 import scala.language.postfixOps
@@ -44,7 +43,7 @@ object BadUnicomplexBootSpec {
     "NoMetaCube"
   ) map (dummyJarsDir + "/" + _)
 
-  val (_, port) = Utils.temporaryServerHostnameAndPort()
+  val (_, port) = temporaryServerHostnameAndPort()
 
   val config = ConfigFactory.parseString(
     s"""

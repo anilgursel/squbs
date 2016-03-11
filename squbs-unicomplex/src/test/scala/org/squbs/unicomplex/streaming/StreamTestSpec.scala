@@ -40,7 +40,7 @@ object StreamTestSpec {
     "StreamSvc"
   ) map (dummyJarsDir + "/" + _)
 
-  val (_, port) = Utils.temporaryServerHostnameAndPort()
+  val (_, port) = temporaryServerHostnameAndPort()
 
   val config = ConfigFactory.parseString(
     s"""

@@ -24,7 +24,6 @@ import org.scalatest.{BeforeAndAfterAll, FlatSpecLike, Matchers}
 import org.squbs.lifecycle.GracefulStop
 import org.squbs.unicomplex.Timeouts._
 import org.squbs.unicomplex.{Unicomplex, UnicomplexBoot, JMX}
-import spray.util.Utils
 
 import scala.concurrent.Await
 
@@ -36,7 +35,7 @@ object RouteDefinitionSpec {
     "RouteDefinitionSpec"
   ) map (dummyJarsDir + "/" + _)
 
-  val (_, port) = Utils.temporaryServerHostnameAndPort()
+  val (_, port) = temporaryServerHostnameAndPort()
 
   val config = ConfigFactory.parseString(
     s"""
