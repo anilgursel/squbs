@@ -29,6 +29,7 @@ import scala.concurrent.Future
 
 package object streaming {
 
+  // Remove this once Akka-Http exposes this test utility.
   def temporaryServerAddress(interface: String = "127.0.0.1"): InetSocketAddress = {
     val serverSocket = ServerSocketChannel.open()
     try {
