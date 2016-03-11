@@ -41,7 +41,7 @@ object MultiListenerSpecActorSystem {
   val config = ConfigFactory.parseString(
       s"""
         squbs {
-          actorsystem-name = "MultiListen"
+          actorsystem-name = streaming-MultiListen
           ${JMX.prefixConfig} = true
           experimental-mode-on = true
         }

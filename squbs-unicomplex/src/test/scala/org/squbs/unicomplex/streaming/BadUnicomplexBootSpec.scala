@@ -49,7 +49,7 @@ object BadUnicomplexBootSpec {
   val config = ConfigFactory.parseString(
     s"""
        |squbs {
-       |  actorsystem-name = BadUnicomplexBootSpec
+       |  actorsystem-name = streaming-BadUnicomplexBootSpec
        |  ${JMX.prefixConfig} = true
        |  experimental-mode-on = true
        |}

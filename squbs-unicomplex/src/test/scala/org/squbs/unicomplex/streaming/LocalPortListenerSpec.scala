@@ -37,7 +37,7 @@ object LocalPortListenerSpecActorSystem {
   val config = ConfigFactory.parseString(
       s"""
         squbs {
-          actorsystem-name = "LocalPortListenerSpec"
+          actorsystem-name = streaming-LocalPortListenerSpec
           prefix-jmx-name = true
           experimental-mode-on = true
         }

@@ -42,7 +42,7 @@ object StopAndStartCubeSpec {
   val config = ConfigFactory.parseString(
     s"""
        |squbs {
-       |  actorsystem-name = StopAndStartCubeSpec
+       |  actorsystem-name = streaming-StopAndStartCubeSpec
        |  ${JMX.prefixConfig} = true
        |  experimental-mode-on = true
        |}

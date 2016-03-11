@@ -57,7 +57,7 @@ object UnicomplexSpec {
   val config = ConfigFactory.parseString(
     s"""
        |squbs {
-       |  actorsystem-name = streamingUnicomplexSpec
+       |  actorsystem-name = streaming-UnicomplexSpec
        |  ${JMX.prefixConfig} = true
        |  experimental-mode-on = true
        |}
@@ -205,8 +205,8 @@ class UnicomplexSpec extends TestKit(UnicomplexSpec.boot.actorSystem) with Impli
       cubeState should be ("Active")
 
       val WellKnownActors = mBeanServer.getAttribute(cubesObjName, "WellKnownActors").asInstanceOf[String]
-      WellKnownActors should include ("Actor[akka://streamingUnicomplexSpec/user/DummyCube/Prepender#")
-      WellKnownActors should include ("Actor[akka://streamingUnicomplexSpec/user/DummyCube/Appender#")
+      WellKnownActors should include ("Actor[akka://streaming-UnicomplexSpec/user/DummyCube/Prepender#")
+      WellKnownActors should include ("Actor[akka://streaming-UnicomplexSpec/user/DummyCube/Appender#")
     }
 
     "check listener MXbean" in {

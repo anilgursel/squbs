@@ -40,7 +40,7 @@ object RootCtxRouteSpec{
     s"""
        |default-listener.bind-port = $port
        |squbs {
-       |  actorsystem-name = rootCtxRouteSpec
+       |  actorsystem-name = streaming-rootCtxRouteSpec
        |  ${JMX.prefixConfig} = true
        |  experimental-mode-on = true
        |}

@@ -43,7 +43,7 @@ object UnicomplexTimeoutSpec {
   val aConfig = ConfigFactory.parseString(
     s"""
        |squbs {
-       |  actorsystem-name = unicomplexTimeoutSpec
+       |  actorsystem-name = streaming-unicomplexTimeoutSpec
        |  ${JMX.prefixConfig} = true
        |  experimental-mode-on = true
        |}

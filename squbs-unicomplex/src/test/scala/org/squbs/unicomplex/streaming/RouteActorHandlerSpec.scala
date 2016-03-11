@@ -39,7 +39,7 @@ object RouteActorHandlerSpec {
     s"""
        |default-listener.bind-port = $port
        |squbs {
-       |  actorsystem-name = routeActorHandlerSpec
+       |  actorsystem-name = streaming-routeActorHandlerSpec
        |  ${JMX.prefixConfig} = true
        |  experimental-mode-on = true
        |}

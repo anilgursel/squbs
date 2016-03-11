@@ -41,7 +41,7 @@ object RouteDefinitionSpec {
   val config = ConfigFactory.parseString(
     s"""
        |squbs {
-       |  actorsystem-name = routeDef
+       |  actorsystem-name = streaming-routeDef
        |  ${JMX.prefixConfig} = true
        |  experimental-mode-on = true
        |}

@@ -45,7 +45,7 @@ object StreamTestSpec {
   val config = ConfigFactory.parseString(
     s"""
        |squbs {
-       |  actorsystem-name = StreamTest
+       |  actorsystem-name = streaming-StreamTest
        |  ${JMX.prefixConfig} = true
        |  experimental-mode-on = true
        |}
