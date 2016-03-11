@@ -34,7 +34,7 @@ import scala.language.postfixOps
 
 object BadUnicomplexBootSpec {
 
-  val dummyJarsDir = getClass.getClassLoader.getResource("classpaths").getPath
+  val dummyJarsDir = getClass.getClassLoader.getResource("classpaths/streaming").getPath
 
   val classPaths = Array(
     "BadUnicomplexBoot",
@@ -51,6 +51,7 @@ object BadUnicomplexBootSpec {
        |squbs {
        |  actorsystem-name = BadUnicomplexBootSpec
        |  ${JMX.prefixConfig} = true
+       |  experimental-mode-on = true
        |}
        |default-listener.bind-port = $port
     """.stripMargin
