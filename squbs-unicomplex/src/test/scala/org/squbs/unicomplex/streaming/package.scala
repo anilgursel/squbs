@@ -26,11 +26,15 @@ import scala.concurrent.Future
 
 package object streaming {
 
+  def extractEntityAsString(response: HttpResponse)
+                           (implicit am: ActorMaterializer, system: ActorSystem): Future[String] = {
+    import system.dispatcher
+    response.entity.dataBytes.runFold(ByteString(""))(_ ++ _) map(_.utf8String)
+  }
+
   def entityAsString(uri: String)(implicit am: ActorMaterializer, system: ActorSystem): Future[String] = {
     import system.dispatcher
-    get(uri) flatMap {
-      r => r.entity.dataBytes.runFold(ByteString(""))(_ ++ _) map(_.utf8String)
-    }
+    get(uri) flatMap(extractEntityAsString(_))
   }
 
   def entityAsInt(uri: String)(implicit am: ActorMaterializer, system: ActorSystem): Future[Int] = {
