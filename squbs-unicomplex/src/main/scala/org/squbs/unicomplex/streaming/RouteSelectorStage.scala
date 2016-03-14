@@ -46,9 +46,7 @@ final class RouteSelectorStage[A, B](routes: Seq[B], extractItemToMatch: A => B,
       setHandler(in, new InHandler {
         override def onPush(): Unit = {
 
-          pullCount = pullCount - 1
           val elem = grab[A](in)
-
           val itemToMatch = extractItemToMatch(elem)
 
           val matchedRoute = routes.zipWithIndex.find { case (p1, i) =>
@@ -73,8 +71,9 @@ final class RouteSelectorStage[A, B](routes: Seq[B], extractItemToMatch: A => B,
             if(!hasPulled) {
               tryPull(in)
               hasPulled = true
+            } else {
+              pullCount = pullCount + 1
             }
-            pullCount = pullCount + 1
           }
 
           // TODO onDownstreamFinish

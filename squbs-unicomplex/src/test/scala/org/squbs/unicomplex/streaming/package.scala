@@ -55,6 +55,11 @@ package object streaming {
     get(uri) flatMap(extractEntityAsString(_))
   }
 
+  def entityAsStringWithHeaders(uri: String)(implicit am: ActorMaterializer, system: ActorSystem): Future[(String, Seq[HttpHeader])] = {
+    import system.dispatcher
+    get(uri) flatMap( response => extractEntityAsString(response) map((_, response.headers)))
+  }
+
   def entityAsInt(uri: String)(implicit am: ActorMaterializer, system: ActorSystem): Future[Int] = {
     import system.dispatcher
     entityAsString(uri) map (s => s.toInt)
