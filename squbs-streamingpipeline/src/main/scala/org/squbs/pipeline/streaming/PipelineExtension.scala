@@ -45,12 +45,7 @@ class PipelineExtensionImpl(flowMap: Map[String, PipelineFlow],
 
   private def buildPipeline(flowNames: Seq[String]) = {
 
-    val flows = flowMap.toList collect { case (name, flow) if flowNames.contains(name) => flow }
-
-    // TODO Hmm..  This will be encountered during materialization time, in other words, runtime..  Not startup..
-    if(flowNames.size != flows.size) {
-      throw new IllegalArgumentException(s"Pipeline contains unknown flows: [${flowNames.mkString(",")}]")
-    }
+    val flows = flowNames.toList collect { case (name)  => flowMap(name) }
 
     @tailrec
     def connectFlows(currentFlow: PipelineFlow, flowList: List[PipelineFlow]): PipelineFlow = {

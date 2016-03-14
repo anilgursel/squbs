@@ -43,7 +43,7 @@ case class RequestContext(request: HttpRequest,
 
   def addResponseHeaders(headers: HttpHeader*): RequestContext = {
     response.fold(this) {
-      resp => copy(response = Option(resp.copy(headers = request.headers ++ headers)))
+      resp => copy(response = Option(resp.copy(headers = resp.headers ++ headers)))
     }
   }
 }
