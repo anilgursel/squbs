@@ -27,7 +27,7 @@ import akka.stream.ActorMaterializer
 import akka.testkit.{ImplicitSender, TestKit}
 import com.typesafe.config.ConfigFactory
 import org.scalatest._
-import org.scalatest.concurrent.AsyncAssertions
+import org.scalatest.concurrent.{Eventually, AsyncAssertions}
 import org.squbs.lifecycle.GracefulStop
 import org.squbs.unicomplex._
 import org.squbs.unicomplex.UnicomplexBoot.StartupType
@@ -61,12 +61,6 @@ object UnicomplexSpec {
        |  experimental-mode-on = true
        |}
        |default-listener.bind-port = $port
-       |
-       |akka.http {
-       |  host-connection-pool {
-       |    max-connections = 32
-       |  }
-       |}
     """.stripMargin
   )
 
@@ -79,7 +73,7 @@ object UnicomplexSpec {
 
 class UnicomplexSpec extends TestKit(UnicomplexSpec.boot.actorSystem) with ImplicitSender
                              with WordSpecLike with Matchers with Inspectors with BeforeAndAfterAll
-                             with AsyncAssertions {
+                             with AsyncAssertions with Eventually {
 
   import org.squbs.unicomplex.UnicomplexSpec._
   import system.dispatcher
@@ -163,8 +157,11 @@ class UnicomplexSpec extends TestKit(UnicomplexSpec.boot.actorSystem) with Impli
 
       Await.result(put(s"http://127.0.0.1:$port/withstash/"), timeout.duration).status should be (StatusCodes.Created)
 
-      // TODO Comment from the original unit test: // This line fails inconsistently.
-      Await.result(entityAsString(s"http://127.0.0.1:$port/withstash/"), timeout.duration) should be (Seq("request message").toString)
+      // Whether messages from unstashall or the message from this request will be the first message to StashCubeSvc
+      // is not deterministic.  So, running it in eventually.
+      eventually {
+        Await.result(entityAsString(s"http://127.0.0.1:$port/withstash/"), timeout.duration) should be (Seq("request message").toString)
+      }
     }
 
     "service actor with WebContext must have a WebContext" in {
