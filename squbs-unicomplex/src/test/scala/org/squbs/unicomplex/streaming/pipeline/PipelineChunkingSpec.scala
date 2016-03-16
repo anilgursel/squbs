@@ -16,13 +16,14 @@
 
 package org.squbs.unicomplex.streaming.pipeline
 
-import akka.actor.ActorSystem
+import akka.actor.{Actor, ActorSystem}
 import akka.http.scaladsl.Http
+import akka.http.scaladsl.model.HttpEntity.{LastChunk, Chunk}
 import akka.http.scaladsl.model.headers.RawHeader
-import akka.http.scaladsl.model.{MediaTypes, HttpEntity, HttpMethods, HttpRequest}
+import akka.http.scaladsl.model._
 import akka.http.scaladsl.server._
 import akka.stream.ActorMaterializer
-import akka.stream.scaladsl.FileIO
+import akka.stream.scaladsl.{Sink, Source, FileIO}
 import akka.testkit.{ImplicitSender, TestKit}
 import com.typesafe.config.ConfigFactory
 import org.scalatest.{BeforeAndAfterAll, Matchers, FlatSpecLike}
@@ -88,7 +89,7 @@ class PipelineChunkingSpec extends TestKit(PipelineChunkingSpec.boot.actorSystem
     Unicomplex(system).uniActor ! GracefulStop
   }
 
-  it should "run pipeline flow for chunk uploads" in {
+  it should "run pipeline flow for chunked requests" in {
     val filePath =
       PipelineChunkingSpec.getClass.getResource("/classpaths/streaming/StreamSvc/dummy.txt").getPath
     val file = new java.io.File(filePath)
@@ -125,6 +126,37 @@ class PipelineChunkingSpec extends TestKit(PipelineChunkingSpec.boot.actorSystem
     val expectedResponseEntity = s"Chunk Count: $expectedNumberOfChunks ByteCount: ${file.length} $expectedRequestHeaders"
     actualResponseEntity should be(expectedResponseEntity)
   }
+
+  it should "run pipeline for chunked responses" in {
+    val response = Await.result(Http().singleRequest(HttpRequest(uri = s"http://127.0.0.1:$port/chunkingactor/")) , awaitMax)
+
+    val expectedRequestHeaders = Seq(
+      RawHeader("keyA", "valA"),
+      RawHeader("keyB", "valB"),
+      RawHeader("keyC", "valC"),
+      RawHeader("keyPreInbound", "valPreInbound"),
+      RawHeader("keyPostInbound", "valPostInbound")).sortBy(_.name).mkString(",")
+
+    val expectedResponseHeaders = Seq(
+      RawHeader("keyD", "valD"),
+      RawHeader("keyPreOutbound", "valPreOutbound"),
+      RawHeader("keyPostOutbound", "valPostOutbound")).sortBy(_.name)
+
+    response.headers.filter(_.name.startsWith("key")).sortBy(_.name) should equal(expectedResponseHeaders)
+
+    response.entity.dataBytes.map(b => Chunk(b)).runWith(Sink.actorRef(self, "Done"))
+    expectMsg(Chunk("1"))
+    expectMsg(Chunk("2"))
+    expectMsg(Chunk("3"))
+    expectMsg(Chunk("4"))
+    expectMsg(Chunk("5"))
+    expectMsg(Chunk("6"))
+    expectMsg(Chunk("7"))
+    expectMsg(Chunk("8"))
+    expectMsg(Chunk("9"))
+    expectMsg(Chunk(expectedRequestHeaders)) // ChunkingActor sends request headers as the 10th chunk
+    expectMsg("Done")
+  }
 }
 
 class FileUploadRoute extends RouteDefinition {
@@ -154,4 +186,16 @@ class FileUploadRoute extends RouteDefinition {
         }
       }
     }
+}
+
+class ChunkingActor extends Actor {
+
+  override def receive: Receive = {
+    case req: HttpRequest =>
+      val headersAsString = req.headers.filter(_.name.startsWith("key")).sortBy(_.name).mkString(",")
+      val source = Source(1 to 11).map(n => if (n == 10 ) {Chunk(headersAsString)}
+                                            else if (n == 11) { LastChunk }
+                                            else { Chunk(n.toString) })
+      sender() ! HttpResponse(entity = HttpEntity.Chunked(ContentTypes.`text/plain(UTF-8)`, source))
+  }
 }
