@@ -16,8 +16,9 @@
 
 package org.squbs.unicomplex.streaming.pipeline
 
-import akka.actor.ActorSystem
-import akka.http.scaladsl.model.HttpHeader
+import akka.actor.Actor.Receive
+import akka.actor.{Actor, ActorSystem}
+import akka.http.scaladsl.model.{HttpResponse, HttpRequest, HttpHeader}
 import akka.http.scaladsl.model.headers.RawHeader
 import akka.http.scaladsl.server.Route
 import akka.stream.{BidiShape, ActorMaterializer}
@@ -140,6 +141,24 @@ class PipelineSpec extends TestKit(
 
     actualEntity should equal("")
   }
+
+  it should "build the flow with defaults for non-route actor" in {
+    val (actualEntity, actualHeaders) = Await.result(entityAsStringWithHeaders(s"http://127.0.0.1:$port/5/dummy"), awaitMax)
+
+    val expectedHeaders = Seq(
+      RawHeader("keyD", "valD"),
+      RawHeader("keyPreOutbound", "valPreOutbound"),
+      RawHeader("keyPostOutbound", "valPostOutbound")).sortBy(_.name)
+
+    actualHeaders.filter(_.name.startsWith("key")).sortBy(_.name) should equal(expectedHeaders)
+
+    actualEntity should equal(Seq(
+      RawHeader("keyA", "valA"),
+      RawHeader("keyB", "valB"),
+      RawHeader("keyC", "valC"),
+      RawHeader("keyPreInbound", "valPreInbound"),
+      RawHeader("keyPostInbound", "valPostInbound")).sortBy(_.name).mkString(","))
+  }
 }
 
 class DummyRoute extends RouteDefinition {
@@ -150,6 +169,14 @@ class DummyRoute extends RouteDefinition {
         complete(headers.filter(_.name.startsWith("key")).sortBy(_.name).mkString(","))
       }
     }
+}
+
+class DummyActor extends Actor {
+
+  override def receive: Receive = {
+    case req: HttpRequest =>
+      sender() ! HttpResponse(entity = req.headers.filter(_.name.startsWith("key")).sortBy(_.name).mkString(","))
+  }
 }
 
 class DummyFlow1 extends PipelineFlowFactory {
