@@ -16,7 +16,6 @@
 
 package org.squbs.unicomplex.streaming.pipeline
 
-import akka.actor.Actor.Receive
 import akka.actor.{Actor, ActorSystem}
 import akka.http.scaladsl.model.{HttpResponse, HttpRequest, HttpHeader}
 import akka.http.scaladsl.model.headers.RawHeader
@@ -50,9 +49,9 @@ object PipelineSpec {
        |  experimental-mode-on = true
        |}
        |
-       |dummyFlow1 {
+       |dummyFlow {
        |  type = squbs.pipelineflow
-       |  factory = org.squbs.unicomplex.streaming.pipeline.DummyFlow1
+       |  factory = org.squbs.unicomplex.streaming.pipeline.DummyFlow
        |}
        |
        |preFlow {
@@ -179,7 +178,7 @@ class DummyActor extends Actor {
   }
 }
 
-class DummyFlow1 extends PipelineFlowFactory {
+class DummyFlow extends PipelineFlowFactory {
 
   override def create: PipelineFlow = {
 
