@@ -16,7 +16,6 @@
 
 package org.squbs.unicomplex.streaming.streamSvc
 
-import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server._
 import org.squbs.unicomplex.streaming.RouteDefinition
 
