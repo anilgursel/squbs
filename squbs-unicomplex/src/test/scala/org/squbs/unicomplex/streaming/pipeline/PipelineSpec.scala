@@ -17,9 +17,10 @@
 package org.squbs.unicomplex.streaming.pipeline
 
 import akka.actor.{Actor, ActorSystem}
-import akka.http.scaladsl.model.{HttpResponse, HttpRequest, HttpHeader}
+import akka.http.scaladsl.model.Uri.Path
+import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.headers.RawHeader
-import akka.http.scaladsl.server.Route
+import akka.http.scaladsl.server.{ExceptionHandler, RejectionHandler, Route}
 import akka.stream.{BidiShape, ActorMaterializer}
 import akka.stream.scaladsl.{Flow, GraphDSL, BidiFlow}
 import akka.testkit.{ImplicitSender, TestKit}
@@ -158,6 +159,29 @@ class PipelineSpec extends TestKit(
       RawHeader("keyPreInbound", "valPreInbound"),
       RawHeader("keyPostInbound", "valPostInbound")).sortBy(_.name).mkString(","))
   }
+
+  it should "bypass the response flow when request times out" in {
+    val (_, actualHeaders) = Await.result(entityAsStringWithHeaders(s"http://127.0.0.1:$port/5/timeout"), awaitMax)
+    actualHeaders.filter(_.name.startsWith("key")).sortBy(_.name) should equal(Seq.empty[HttpHeader])
+  }
+
+  it should "run the pipeline when resource could not be found in route level" in {
+    val (actualEntity, actualHeaders) = Await.result(entityAsStringWithHeaders(s"http://127.0.0.1:$port/1/notexists"), awaitMax)
+
+    val expectedHeaders = Seq(
+      RawHeader("keyD", "valD"),
+      RawHeader("keyPreOutbound", "valPreOutbound"),
+      RawHeader("keyPostOutbound", "valPostOutbound")).sortBy(_.name)
+
+    actualHeaders.filter(_.name.startsWith("key")).sortBy(_.name) should equal(expectedHeaders)
+    actualEntity should equal("Custom route level not found message.")
+  }
+
+  it should "not build a flow for the resource not found in webcontext level scenario" in {
+    val (actualEntity, actualHeaders) = Await.result(entityAsStringWithHeaders(s"http://127.0.0.1:$port/notexists"), awaitMax)
+    actualHeaders.filter(_.name.startsWith("key")).sortBy(_.name) should equal(Seq.empty[HttpHeader])
+    actualEntity should equal(StatusCodes.NotFound.defaultMessage)
+  }
 }
 
 class DummyRoute extends RouteDefinition {
@@ -168,11 +192,17 @@ class DummyRoute extends RouteDefinition {
         complete(headers.filter(_.name.startsWith("key")).sortBy(_.name).mkString(","))
       }
     }
+
+  override def rejectionHandler: Option[RejectionHandler] = Some(RejectionHandler.newBuilder().handleNotFound {
+    complete(StatusCodes.NotFound, "Custom route level not found message.")
+  }.result())
 }
 
 class DummyActor extends Actor {
 
   override def receive: Receive = {
+    case req @ HttpRequest(_, Uri(_, _, Path("/5/timeout"), _, _), _, _, _) => // Do nothing
+
     case req: HttpRequest =>
       sender() ! HttpResponse(entity = req.headers.filter(_.name.startsWith("key")).sortBy(_.name).mkString(","))
   }
