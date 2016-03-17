@@ -1,63 +1,145 @@
-// TODO Just the basics to show the usage...  Once the design is reviewed, then write the full doc..  
 #Streaming Request/Response Pipeline
 
 ### Overview
 
+We often need to have common infrastructure functionality across different squbs services, or as organizational standards.  Such infrastructure includes, but is not limited to logging, request tracing, authentication/authorization, tracking, cookie management, A/B testing, etc.
+
+As squbs promotes separation of concerns, such logic would belong to infrastructure and not service implementation.  The squbs streaming pipeline allows infrastructure to provide components installed into a service without service owner having to worry about such aspects in their service or actors.
+
+Generally speaking, a squbs streaming pipeline is a Bidi Flow acting as a bridge in between the Akka Http layer and the squbs service.  That is to say:
+
+   * All request messages sent from Akka Http to squbs service will go thru the pipeline
+   * Vice versa, all response messages sent from squbs service will go thru the pipeline.
 
 ### Streaming pipeline declaration
 
-In `squbs-meta.conf`, you can specify the inbound/outbound flows for your service:
+In `squbs-meta.conf`, you can specify the pipeline for your service:
 
 ```
 squbs-services = [
   {
-    class-name = com.ebay.myapp.MyActor
+    class-name = org.squbs.sample.MyActor
     web-context = mypath
-    inbound = [dummyFlow, trackingFlow]
-    outbound = [headerFlow]
+    pipeline = dummyflow
   }
 ]
 ```
-* If there are no custom inbound/outbound flows for a squbs-service, just omit.
-* Default inbound/outbound flows specified via the below configuration are automatically added to the lists unless `defaultFlowsOn` is set to `false`:
+* If there are no custom pipeline for a squbs-service, just omit.
+* Default pre/post flows specified via the below configuration are automatically connected to the pipeline unless `defaultPipelineOn` is set to `false`:
 
 ```
-squbs.pipeline.streaming {
-	default-inbound-flows = [defaultFlow1, defaultFlow2]
-	default-outbound-flows = [defaultFlow3]
+squbs.pipeline.streaming.defaults {
+	pre-flow = defaultPreFlow
+	post-flow = defaultPostFlow
 }
 ```
 
-
-### Flow Configuration
-
-A flow can be specified as below:
+With the above configuration, the pipeline would look like:
 
 ```
-dummyFlow {
+                 +---------+   +---------+   +---------+   +---------+
+RequestContext ~>|         |~> |         |~> |         |~> |         | 
+                 | default |   |  dummy  |   | default |   |  squbs  |
+                 | PreFlow |   |  flow   |   | PostFlow|   | service | 
+RequestContext <~|         |<~ |         |<~ |         |<~ |         |
+                 +---------+   +---------+   +---------+   +---------+
+```
+
+`RequestContext` is basically a wrapper around `HttpRequest` and `HttpResponse`, which also allows carrying context information.
+
+### Bidi Flow Configuration
+
+A bidi flow can be specified as below:
+
+```
+dummyflow {
   type = squbs.pipelineflow
-  factory = com.ebay.myorg.squbsmidverificationserv.svc.DummyFlow
-  order = 1
+  factory = org.squbs.sample.DummyBidiFlow
 }
 ```
 
 * type: to idenfity the configuration as a `squbs.pipelineflow`.
-* factory: the factor class to create the `Flow` from.
-* order: the priority of this flow compared to the others.  If flowA has order 5, flowB has order 1, flowC has order 20, then the pipeline will look as `flowB ~> flowA ~> flowC`.
+* factory: the factor class to create the `BidiFlow` from.
 
-A sample `FlowFactory` looks like below:
+A sample `DummyBidiFlow` looks like below:
 
 ```scala
-class DummyFlow extends FlowFactory {
+class DummyBidiFlow extends PipelineFlowFactory {
 
-  override def create: Flow[RequestContext, RequestContext, Unit] = {
-
-    Flow.fromGraph(GraphDSL.create() { implicit b =>
-
-      val myDummyFlow = b.add(Flow[RequestContext].map { rc => rc.withAttributes(("myname", "Anil")) })
-
-      FlowShape(myDummyFlow.in, myDummyFlow.out)
+  override def create: PipelineFlow = {
+     BidiFlow.fromGraph(GraphDSL.create() { implicit b =>
+      val inbound = b.add(Flow[RequestContext].map { rc => rc.addRequestHeader(RawHeader("DummyRequest", "ReqValue")) })
+      val outbound = b.add(Flow[RequestContext].map{ rc => rc.addResponseHeader(RawHeader("DummyResponse", "ResValue"))})
+      BidiShape.fromFlows(inbound, outbound)
     })
   }
 }
+```
+
+#### Aborting the flow
+In certain scenarios, a stage in pipeline may have a need to abort the flow immediately and return an `HttpResponse`, e.g., in case of authentication/authorization.  In such scenarios, the rest of the pipeline should be skipped and the request should not reach to the squbs service.  To skip the rest of the flow: 
+
+* the flow needs to be added to builder with `abortable`, e.g., `b.add(authorization abortable)`.
+* set the `HttpResponse` on `RequestContext` when you need to abort.
+
+In the below `DummyAbortableBidiFlow ` example, `authorization ` is a bidi flow with `abortable` and it aborts the flow is user is not authorized: 
+
+```scala
+class DummyAbortableBidiFlow extends PipelineFlowFactory {
+
+  override def create: PipelineFlow = {
+
+    BidiFlow.fromGraph(GraphDSL.create() { implicit b =>
+      import GraphDSL.Implicits._
+      val inboundA = b.add(Flow[RequestContext].map { rc => rc.addRequestHeader(RawHeader("keyInA", "valInA")) })
+      val inboundC = b.add(Flow[RequestContext].map { rc => rc.addRequestHeader(RawHeader("keyInC", "valInC")) })
+      val outboundA = b.add(Flow[RequestContext].map { rc => rc.addResponseHeaders(RawHeader("keyOutA", "valOutA"))})
+      val outboundC = b.add(Flow[RequestContext].map { rc => rc.addResponseHeaders(RawHeader("keyOutC", "valOutC"))})
+
+      val inboundOutboundB = b.add(authorization abortable)
+
+      inboundA ~>  inboundOutboundB.in1
+                   inboundOutboundB.out1 ~> inboundC
+                   inboundOutboundB.in2  <~ outboundC
+      outboundA <~ inboundOutboundB.out2
+
+      BidiShape(inboundA.in, inboundC.out, outboundC.in, outboundA.out)
+    })
+  }
+
+  val authorization = BidiFlow.fromGraph(GraphDSL.create() { implicit b =>
+
+    val authorization = b.add(Flow[RequestContext] map { rc =>
+        if(!isAuthorized) {
+          rc.copy(response = Some(HttpResponse(StatusCodes.Unauthorized, entity = "~> ~> bypassing in inbound")))
+        } else rc
+    })
+
+    val noneFlow = b.add(Flow[RequestContext]) // Do nothing
+
+    BidiShape.fromFlows(authorization, noneFlow)
+  })
+}
+```
+
+Once a flow is added with `abortable`, a bidi flow gets connected.  This bidi flow checks the existence of `HttpResponse` and bypasses or sends the request downstream.  Here is how the above `DummyAbortableBidiFlow` looks:
+
+
+```
+                                                +-----------------------------------+
+                                                |  +-----------+    +-----------+   |   +-----------+
+                  +-----------+   +---------+   |  |           | ~> |  filter   o~~~0 ~>|           |
+                  |           |   |         |   |  |           |    |not aborted|   |   | inboundC  | ~> RequestContext
+RequestContext ~> | inboundA  |~> |         |~> 0~~o broadcast |    +-----------+   |   |           |
+                  |           |   |         |   |  |           |                    |   +-----------+
+                  +-----------+   |         |   |  |           | ~> +-----------+   |
+                                  | inbound |   |  +-----------+    |  filter   |   |
+                                  | outbound|   |                   |  aborted  |   |
+                  +-----------+   |   B     |   |  +-----------+ <~ +-----------+   |   +-----------+
+                  |           |   |         |   |  |           |                    |   |           |
+RequestContext <~ | outboundA | <~|         | <~0~~o   merge   |                    |   | outboundC | <~ RequestContext
+                  |           |   |         |   |  |           o~~~~~~~~~~~~~~~~~~~~0 <~|           |
+                  +-----------+   +---------+   |  +-----------+                    |   +-----------+
+                                                +-----------------------------------+
+
 ```
