@@ -59,13 +59,15 @@ timeouts, it can be set lower by passing the desired timeout as an argument to `
 
 #Configuration Resolution
 
-squbs chooses one application configuration and merges it with the aggregated application.conf and reference.conf in the classpath. The application configuration being merged are chosen from the following order.
+squbs chooses one application configuration and merges it with the aggregated `reference.conf` in the classpath. The application configuration being merged are chosen from the following order.
 
 1. If a configuration is provided when creating the boot object, this configuration is chosen. This is the `customConfig` field from the example above.
 
-2. If an `application.conf` file is provided in the external config directory, this `application.conf` is chosen. The external config dir is configured by setting the config property `squbs.external-config-dir` and defaults to `squbsconfig`. Not that this directory cannot be changed or overridden by supplied configuration or an external configuration (as the directory itself is determined using the config property.)
+2. If an `application.conf` file is provided in the external config directory, this `application.conf` is chosen. The external config dir is configured by setting the config property `squbs.external-config-dir` and defaults to `squbsconfig`. Note that this directory cannot be changed or overridden by supplied configuration or an external configuration (as the directory itself is determined using the config property).
 
-3. Otherwise, the `application.conf` provided with the application, if any, will be used. This then falls back to the `reference.conf`.
+3. Otherwise, the `application.conf` provided with the application, if any, will be used.  This then falls back to the `reference.conf`.
+
+Please note, the external config directory can also contain a `reference.conf`.  There is no special ordering and it will be merged with the ones in the classpath.
 
 #Drop-in Modular System 
 

@@ -95,8 +95,9 @@ object UnicomplexBoot extends LazyLogging {
         val addConfigs = configNames map {
           name => ConfigFactory.parseFileAnySyntax(new File(configDir, name), parseOptions)
         }
+        val externalReferenceDotConf = ConfigFactory.parseFileAnySyntax(new File(configDir, "reference"), parseOptions)
         if (addConfigs.isEmpty) baseConfig
-        else ConfigFactory.load((addConfigs :\ baseConfig) (_ withFallback _))
+        else ConfigFactory.load(((addConfigs += baseConfig) :\ externalReferenceDotConf) (_ withFallback _))
     }
   }
 
