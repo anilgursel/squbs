@@ -55,25 +55,26 @@ class BroadcastBuffer[T] private(private[stream] val queue: PersistentQueue[T],
   private[stream] val in = Inlet[T]("BroadcastBuffer.in")
   private[stream] val out = Vector.tabulate(outputPorts)(i ⇒ Outlet[Event[T]]("BroadcastBuffer.out" + i))
   val shape: UniformFanOutShape[T, Event[T]] = UniformFanOutShape(in, out: _*)
+  @volatile private var finished = IndexedSeq.fill[Boolean](outputPorts)(false)
 
   def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
     private var upstreamFinished = false
-    private val finished = Array.fill[Boolean](outputPorts)(false)
 
     override def preStart(): Unit = pull(in)
 
     def outHandler(outlet: Outlet[Event[T]], outputPortId: Int) = new OutHandler {
       override def onPull(): Unit = {
-        queue.dequeue(outputPortId) match {
+        queue.dequeue(outputPortId, finished(outputPortId)) match {
           case None => if (upstreamFinished) {
-              finished(outputPortId) = true
+              finished = finished.updated(outputPortId, true)
               if(finished.reduce(_ && _)) {
-                queue.close()
                 completeStage()
               }
             }
-          case Some(element) => push(outlet, Event(outputPortId, element.index, element.entry))
+          case Some(element) =>
+            push(outlet, Event(outputPortId, element.index, element.entry))
+            queue.lastPushedIndex(outputPortId) = element.index
         }
       }
     }
@@ -85,7 +86,10 @@ class BroadcastBuffer[T] private(private[stream] val queue: PersistentQueue[T],
         onPushCallback()
         out.iterator.zipWithIndex foreach { case (port, id) =>
           if (isAvailable(port))
-            queue.dequeue(id) foreach { element => push(out(id), Event(id, element.index, element.entry)) }
+            queue.dequeue(id, finished(id)) foreach { element =>
+              push(out(id), Event(id, element.index, element.entry))
+              queue.lastPushedIndex(id) = element.index
+            }
         }
         pull(in)
       }
@@ -106,7 +110,7 @@ class BroadcastBuffer[T] private(private[stream] val queue: PersistentQueue[T],
   }
 
   val commit = Flow[Event[T]].map { element =>
-    queue.commit(element.outputPortId, element.commitOffset)
+    queue.commit(element.outputPortId, element.commitOffset, finished(element.outputPortId))
     element
   }
 

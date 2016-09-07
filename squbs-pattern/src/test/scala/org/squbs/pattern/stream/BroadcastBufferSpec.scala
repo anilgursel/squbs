@@ -214,9 +214,8 @@ abstract class BroadcastBufferSpec[T: ClassTag, Q <: QueueSerializer[T] : Manife
           ClosedShape
       })
     val (sink1F, sink2F) = graph1.run()(mat)
-    Try {
-      Await.result(for {a <- sink1F; b <- sink2F} yield (a, b), awaitMax)
-    }
+    Await.result(for {a <- sink1F; b <- sink2F} yield (a, b), awaitMax)
+
     val beforeShutDown  = SinkCounts(atomicCounter(0).get, atomicCounter(1).get)
     resumeGraphAndDoAssertion(beforeShutDown, failTestAt)
     clean()

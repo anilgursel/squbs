@@ -55,11 +55,12 @@ class PersistentBuffer[T] private(private[stream] val queue: PersistentQueue[T],
   private[stream] val out = Outlet[Event[T]]("PersistentBuffer.out")
   val shape: FlowShape[T, Event[T]] = FlowShape.of(in, out)
   val defaultOutputPort = 0
+  @volatile private var reachedEndOfQueue = false
 
   def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
+    private var upstreamFinished = false
     var downstreamWaiting = false
-    var upstreamFinished = false
 
     override def preStart(): Unit = {
       // Start upstream demand
@@ -72,7 +73,7 @@ class PersistentBuffer[T] private(private[stream] val queue: PersistentQueue[T],
         val element = grab(in)
         queue.enqueue(element)
         if (downstreamWaiting) {
-          queue.dequeue() foreach { element =>
+          queue.dequeue(reachedEndOfQueue = upstreamFinished) foreach { element =>
             push(out, Event(defaultOutputPort, element.index, element.entry))
             downstreamWaiting = false
           }
@@ -84,7 +85,6 @@ class PersistentBuffer[T] private(private[stream] val queue: PersistentQueue[T],
         upstreamFinished = true
 
         if (downstreamWaiting) {
-          queue.close()
           completeStage()
         }
       }
@@ -100,12 +100,12 @@ class PersistentBuffer[T] private(private[stream] val queue: PersistentQueue[T],
     setHandler(out, new OutHandler {
 
       override def onPull(): Unit = {
-        queue.dequeue() match {
+        queue.dequeue(reachedEndOfQueue = upstreamFinished) match {
           case Some(element) =>
             push(out, Event(defaultOutputPort, element.index, element.entry))
           case None =>
             if (upstreamFinished) {
-              queue.close()
+              reachedEndOfQueue = true
               completeStage()
             } else downstreamWaiting = true
         }
@@ -114,7 +114,7 @@ class PersistentBuffer[T] private(private[stream] val queue: PersistentQueue[T],
   }
 
   val commit = Flow[Event[T]].map { element =>
-    queue.commit(element.outputPortId, element.commitOffset)
+    queue.commit(element.outputPortId, element.commitOffset, reachedEndOfQueue)
     element
   }
 
