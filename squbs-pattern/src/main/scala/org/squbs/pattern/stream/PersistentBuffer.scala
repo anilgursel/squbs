@@ -49,7 +49,7 @@ class PersistentBuffer[T] private(private[stream] val queue: PersistentQueue[T],
 
   def withOnPushCallback(onPushCallback: () => Unit) = new PersistentBuffer[T](queue, onPushCallback)
 
-  def withOnCommitCallback(onCommitCallback: () => Unit) = new PersistentBuffer[T](queue.withOnCommitCallback(Int => onCommitCallback), onPushCallback)
+  def withOnCommitCallback(onCommitCallback: () => Unit) = new PersistentBuffer[T](queue.withOnCommitCallback(i => onCommitCallback()), onPushCallback)
 
   private[stream] val in = Inlet[T]("PersistentBuffer.in")
   private[stream] val out = Outlet[Event[T]]("PersistentBuffer.out")
@@ -73,6 +73,7 @@ class PersistentBuffer[T] private(private[stream] val queue: PersistentQueue[T],
       override def onPush(): Unit = {
         val element = grab(in)
         queue.enqueue(element)
+        onPushCallback()
         if (downstreamWaiting) {
           queue.dequeue(reachedEndOfQueue = upstreamFinished) foreach { element =>
             push(out, Event(defaultOutputPort, element.index, element.entry))

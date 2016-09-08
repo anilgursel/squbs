@@ -113,6 +113,7 @@ abstract class BroadcastBufferSpec[T: ClassTag, Q <: QueueSerializer[T] : Manife
     val mat = ActorMaterializer()
     var t = Long.MinValue
     val finishedGenerating = Promise[Done]
+    val bBufferInCount = new AtomicInteger(0)
 
     val t0 = System.nanoTime
 
@@ -128,7 +129,7 @@ abstract class BroadcastBufferSpec[T: ClassTag, Q <: QueueSerializer[T] : Manife
       Sink.ignore, Sink.ignore, fireFinished())((_,_,_)) { implicit builder =>
       (sink1, sink2, sink3) =>
         import GraphDSL.Implicits._
-        val buffer = new BroadcastBuffer[T](config).withOnCommitCallback(i => commitCounter(i))
+        val buffer = new BroadcastBuffer[T](config).withOnPushCallback(() => bBufferInCount.incrementAndGet()).withOnCommitCallback(i => commitCounter(i))
         val commit = buffer.commit // makes a dummy flow if autocommit is set to false
         val bcBuffer = builder.add(buffer.async)
         val bc = builder.add(Broadcast[T](2))
@@ -145,8 +146,11 @@ abstract class BroadcastBufferSpec[T: ClassTag, Q <: QueueSerializer[T] : Manife
     Await.result(sink1F.failed, awaitMax) shouldBe an[AbruptTerminationException]
     Await.result(sink2F.failed, awaitMax) shouldBe an[AbruptTerminationException]
 
+    val restartFrom = bBufferInCount.incrementAndGet()
+    println(s"Restart from count $restartFrom")
+
     val beforeShutDown = SinkCounts(atomicCounter(0).get, atomicCounter(1).get)
-    resumeGraphAndDoAssertion(beforeShutDown, elementCount + 1)
+    resumeGraphAndDoAssertion(beforeShutDown, restartFrom)
     clean()
   }
 
