@@ -111,17 +111,14 @@ abstract class BroadcastBufferSpec[T: ClassTag, Q <: QueueSerializer[T] : Manife
     import util._
 
     val mat = ActorMaterializer()
-    var t = Long.MinValue
     val finishedGenerating = Promise[Done]
     val bBufferInCount = new AtomicInteger(0)
+    val counter = new AtomicInteger(0)
 
-    val t0 = System.nanoTime
-
-    def fireFinished() = Flow[T].map(_ => 1L).reduce(_ + _).map { s =>
-      t = System.nanoTime - t0
-      finishedGenerating success Done
-      s
-    }.toMat(Sink.head)(Keep.right)
+    def fireFinished() = Flow[T].map { e =>
+      if(counter.incrementAndGet() == failTestAt) finishedGenerating success Done
+      e
+    }.toMat(Sink.ignore)(Keep.right)
 
     val shutdownF = finishedGenerating.future map { d => mat.shutdown(); d }
 
@@ -142,7 +139,6 @@ abstract class BroadcastBufferSpec[T: ClassTag, Q <: QueueSerializer[T] : Manife
     })
     val (sink1F, sink2F, sink3F) = graph.run()(mat)
 
-    Await.result(sink3F, awaitMax) shouldBe elementCount
     Await.result(sink1F.failed, awaitMax) shouldBe an[AbruptTerminationException]
     Await.result(sink2F.failed, awaitMax) shouldBe an[AbruptTerminationException]
 
