@@ -48,7 +48,7 @@ object UnicomplexTimeoutSpec {
        |  bind-port = 0
        |}
        |akka.http.server {
-       |  request-timeout = 5s
+       |  request-timeout = 3s
        |}
      """.stripMargin)
 
@@ -73,7 +73,7 @@ class UnicomplexTimeoutSpec extends TestKit(UnicomplexTimeoutSpec.boot.actorSyst
   "Unicomplex" must {
 
     "Cause a timeout event" in {
-      system.settings.config getString "akka.http.server.request-timeout" should be ("5s")
+      system.settings.config getString "akka.http.server.request-timeout" should be ("3s")
       val response = Await.result(get(s"http://127.0.0.1:$port/dummysvcactor/timeout"), awaitMax)
       // TODO This test is useless to me..  Need to explore how we can intervene with timeouts..  Do we need to ?
       // There may be scenarios, where we may want to do some work when a timeout happens..  So, having a hook
