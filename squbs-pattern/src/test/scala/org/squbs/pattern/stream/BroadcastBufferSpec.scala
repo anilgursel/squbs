@@ -27,7 +27,6 @@ import org.squbs.testkit.Timeouts._
 
 import scala.concurrent.{Await, Promise}
 import scala.reflect._
-import scala.util.{Failure, Try}
 
 abstract class BroadcastBufferSpec[T: ClassTag, Q <: QueueSerializer[T] : Manifest]
    (typeName: String, autoCommit: Boolean = true) extends FlatSpec with Matchers with BeforeAndAfterAll {
@@ -117,7 +116,7 @@ abstract class BroadcastBufferSpec[T: ClassTag, Q <: QueueSerializer[T] : Manife
 
     val t0 = System.nanoTime
 
-    def fireFinished() = Flow[Any].map(_ => 1L).reduce(_ + _).map { s =>
+    def fireFinished() = Flow[T].map(_ => 1L).reduce(_ + _).map { s =>
       t = System.nanoTime - t0
       finishedGenerating success Done
       s
@@ -126,8 +125,8 @@ abstract class BroadcastBufferSpec[T: ClassTag, Q <: QueueSerializer[T] : Manife
     val shutdownF = finishedGenerating.future map { d => mat.shutdown(); d }
 
     val graph = RunnableGraph.fromGraph(GraphDSL.create(
-      Sink.ignore, Sink.ignore)((_,_)) { implicit builder =>
-      (sink1, sink2) =>
+      Sink.ignore, Sink.ignore, fireFinished())((_,_,_)) { implicit builder =>
+      (sink1, sink2, sink3) =>
         import GraphDSL.Implicits._
         val buffer = new BroadcastBuffer[T](config).withOnCommitCallback(i => commitCounter(i))
         val commit = buffer.commit // makes a dummy flow if autocommit is set to false
@@ -136,12 +135,13 @@ abstract class BroadcastBufferSpec[T: ClassTag, Q <: QueueSerializer[T] : Manife
 
         in ~> transform ~> bc ~> bcBuffer ~> throttle ~> commit ~> sink1
                                  bcBuffer ~> throttle ~> commit ~> sink2
-                           bc ~> fireFinished()
+                           bc ~> sink3
 
         ClosedShape
     })
-    val (sink1F, sink2F) = graph.run()(mat)
+    val (sink1F, sink2F, sink3F) = graph.run()(mat)
 
+    Await.result(sink3F, awaitMax) shouldBe elementCount
     Await.result(sink1F.failed, awaitMax) shouldBe an[AbruptTerminationException]
     Await.result(sink2F.failed, awaitMax) shouldBe an[AbruptTerminationException]
 
