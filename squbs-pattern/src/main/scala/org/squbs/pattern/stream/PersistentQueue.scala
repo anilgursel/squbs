@@ -129,17 +129,20 @@ class PersistentQueue[T](config: QueueConfig, onCommitCallback: Int => Unit = (x
     * @param outputPortId The id of the output port
     * @param index to be committed for next read
     */
-  def commit(outputPortId: Int, index: Long, reachedEndOfQueue: Boolean): Unit = if (!autoCommit) internalCommit(outputPortId, index, reachedEndOfQueue)
+  def commit(outputPortId: Int, index: Long, reachedEndOfQueue: Boolean, upstreamFailed: Boolean): Unit =
+    if (!autoCommit) internalCommit(outputPortId, index, reachedEndOfQueue, upstreamFailed)
 
-  private def internalCommit(outputPortId: Int, index: Long, reachedEndOfQueue: Boolean) = {
-    if (!indexMounted) mountIndexFile()
-    indexStore.writeLong(outputPortId << 3, index)
-    onCommitCallback(outputPortId)
+  private def internalCommit(outputPortId: Int, index: Long, reachedEndOfQueue: Boolean, upstreamFailed: Boolean = false) = {
+    if(!upstreamFailed) {
+      if (!indexMounted) mountIndexFile()
+      indexStore.writeLong(outputPortId << 3, index)
+      onCommitCallback(outputPortId)
 
-    if(reachedEndOfQueue && lastPushedIndex(outputPortId) == index) {
-      synchronized {
-        reachedToPushedIndex = reachedToPushedIndex.updated(outputPortId, true)
-        if(reachedToPushedIndex.forall(_ == true)) close()
+      if (reachedEndOfQueue && lastPushedIndex(outputPortId) == index) {
+        synchronized {
+          reachedToPushedIndex = reachedToPushedIndex.updated(outputPortId, true)
+          if (reachedToPushedIndex.forall(_ == true)) close()
+        }
       }
     }
   }

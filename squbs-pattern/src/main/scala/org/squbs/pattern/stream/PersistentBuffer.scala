@@ -56,6 +56,7 @@ class PersistentBuffer[T] private(private[stream] val queue: PersistentQueue[T],
   val shape: FlowShape[T, Event[T]] = FlowShape.of(in, out)
   val defaultOutputPort = 0
   @volatile private var reachedEndOfQueue = false
+  @volatile private var upstreamFailed = false
 
   def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
@@ -92,6 +93,7 @@ class PersistentBuffer[T] private(private[stream] val queue: PersistentQueue[T],
       override def onUpstreamFailure(ex: Throwable): Unit = {
         val logger = Logger(LoggerFactory.getLogger(this.getClass))
         logger.error("Received upstream failure signal: " + ex)
+        upstreamFailed = true
         queue.close()
         completeStage()
       }
@@ -114,7 +116,7 @@ class PersistentBuffer[T] private(private[stream] val queue: PersistentQueue[T],
   }
 
   val commit = Flow[Event[T]].map { element =>
-    queue.commit(element.outputPortId, element.commitOffset, reachedEndOfQueue)
+    queue.commit(element.outputPortId, element.commitOffset, reachedEndOfQueue, upstreamFailed)
     element
   }
 

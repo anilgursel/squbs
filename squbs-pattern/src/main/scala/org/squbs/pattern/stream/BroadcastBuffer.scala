@@ -56,6 +56,7 @@ class BroadcastBuffer[T] private(private[stream] val queue: PersistentQueue[T],
   private[stream] val out = Vector.tabulate(outputPorts)(i ⇒ Outlet[Event[T]]("BroadcastBuffer.out" + i))
   val shape: UniformFanOutShape[T, Event[T]] = UniformFanOutShape(in, out: _*)
   @volatile private var finished = IndexedSeq.fill[Boolean](outputPorts)(false)
+  @volatile private var upstreamFailed = false
 
   def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
@@ -99,6 +100,7 @@ class BroadcastBuffer[T] private(private[stream] val queue: PersistentQueue[T],
       override def onUpstreamFailure(ex: Throwable): Unit = {
         val logger = Logger(LoggerFactory.getLogger(this.getClass))
         logger.error("Received upstream failure signal: " + ex)
+        upstreamFailed = true
         queue.close()
         completeStage()
       }
@@ -110,7 +112,7 @@ class BroadcastBuffer[T] private(private[stream] val queue: PersistentQueue[T],
   }
 
   val commit = Flow[Event[T]].map { element =>
-    queue.commit(element.outputPortId, element.commitOffset, finished(element.outputPortId))
+    queue.commit(element.outputPortId, element.commitOffset, finished(element.outputPortId), upstreamFailed)
     element
   }
 
