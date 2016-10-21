@@ -53,7 +53,6 @@ abstract class PersistentBufferSpec[T: ClassTag, Q <: QueueSerializer[T]: Manife
     import util._
     val buffer = PersistentBuffer[T](config)
     buffer.queue.serializer shouldBe a [Q]
-    val commit = buffer.commit[T] // makes a dummy flow if autocommit is set to false
     val countFuture = in.via(transform).via(buffer.async).runWith(flowCounter)
     val count = Await.result(countFuture, awaitMax)
     count shouldBe elementCount

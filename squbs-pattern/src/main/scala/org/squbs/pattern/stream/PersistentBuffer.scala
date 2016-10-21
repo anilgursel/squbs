@@ -30,25 +30,28 @@ import org.slf4j.LoggerFactory
   *
   * '''Emits when''' one of the inputs has an element available
   *
-  * '''Does not Backpressure''' upstream when downstream backpressures, instead buffers the stream element to memory mapped queue
+  * '''Does not Backpressure''' upstream when downstream backpressures, instead buffers the stream element to
+  * memory mapped queue
   *
   * '''Completes when''' upstream completes
   *
   * '''Cancels when''' downstream cancels
   *
   */
-class PersistentBuffer[T] private(queue: PersistentQueue[T],
-                                  onPushCallback: () => Unit = () => {})
-                                 (implicit serializer: QueueSerializer[T],
-                                  system: ActorSystem) extends PersistentBufferBase[T, T](queue, onPushCallback)(serializer, system) {
+class PersistentBuffer[T] private(queue: PersistentQueue[T], onPushCallback: () => Unit = () => {})
+                                 (implicit serializer: QueueSerializer[T], system: ActorSystem)
+  extends PersistentBufferBase[T, T](queue, onPushCallback)(serializer, system) {
 
-  def this(config: Config)(implicit serializer: QueueSerializer[T], system: ActorSystem) = this(new PersistentQueue[T](config))
+  def this(config: Config)(implicit serializer: QueueSerializer[T], system: ActorSystem) =
+    this(new PersistentQueue[T](config))
 
-  def this(persistDir: File)(implicit serializer: QueueSerializer[T], system: ActorSystem) = this(new PersistentQueue[T](persistDir))
+  def this(persistDir: File)(implicit serializer: QueueSerializer[T], system: ActorSystem) =
+    this(new PersistentQueue[T](persistDir))
 
   def withOnPushCallback(onPushCallback: () => Unit) = new PersistentBuffer[T](queue, onPushCallback)
 
-  def withOnCommitCallback(onCommitCallback: () => Unit) = new PersistentBuffer[T](queue.withOnCommitCallback(i => onCommitCallback()), onPushCallback)
+  def withOnCommitCallback(onCommitCallback: () => Unit) =
+    new PersistentBuffer[T](queue.withOnCommitCallback(i => onCommitCallback()), onPushCallback)
 
   override protected def autoCommit(index: Long) = queue.commit(defaultOutputPort, index)
 
@@ -56,9 +59,11 @@ class PersistentBuffer[T] private(queue: PersistentQueue[T],
 }
 
 object PersistentBuffer {
-  def apply[T](config: Config)(implicit serializer: QueueSerializer[T], system: ActorSystem) = new PersistentBuffer[T](config)
+  def apply[T](config: Config)(implicit serializer: QueueSerializer[T], system: ActorSystem) =
+    new PersistentBuffer[T](config)
 
-  def apply[T](persistDir: File)(implicit serializer: QueueSerializer[T], system: ActorSystem) = new PersistentBuffer[T](persistDir)
+  def apply[T](persistDir: File)(implicit serializer: QueueSerializer[T], system: ActorSystem) =
+    new PersistentBuffer[T](persistDir)
 }
 
 /**
@@ -66,7 +71,8 @@ object PersistentBuffer {
   *
   * '''Emits when''' one of the inputs has an element available
   *
-  * '''Does not Backpressure''' upstream when downstream backpressures, instead buffers the stream element to memory mapped queue
+  * '''Does not Backpressure''' upstream when downstream backpressures, instead buffers the stream element to
+  * memory mapped queue
   *
   * '''Completes when''' upstream completes
   *
@@ -76,24 +82,36 @@ object PersistentBuffer {
   * after downstream consumer.
   *
   */
-class PersistentBufferAtLeastOnce[T] private(queue: PersistentQueue[T],
-                                  onPushCallback: () => Unit = () => {})
-                                 (implicit serializer: QueueSerializer[T],
-                                  system: ActorSystem) extends PersistentBufferBase[T, Event[T]](queue, onPushCallback)(serializer, system) {
+class PersistentBufferAtLeastOnce[T] private(queue: PersistentQueue[T], onPushCallback: () => Unit = () => {})
+                                 (implicit serializer: QueueSerializer[T], system: ActorSystem)
+  extends PersistentBufferBase[T, Event[T]](queue, onPushCallback)(serializer, system) {
 
-  def this(config: Config)(implicit serializer: QueueSerializer[T], system: ActorSystem) = this(new PersistentQueue[T](config))
+  def this(config: Config)(implicit serializer: QueueSerializer[T], system: ActorSystem) =
+    this(new PersistentQueue[T](config))
 
-  def this(persistDir: File)(implicit serializer: QueueSerializer[T], system: ActorSystem) = this(new PersistentQueue[T](persistDir))
+  def this(persistDir: File)(implicit serializer: QueueSerializer[T], system: ActorSystem) =
+    this(new PersistentQueue[T](persistDir))
 
   def withOnPushCallback(onPushCallback: () => Unit) = new PersistentBufferAtLeastOnce[T](queue, onPushCallback)
 
-  def withOnCommitCallback(onCommitCallback: () => Unit) = new PersistentBufferAtLeastOnce[T](queue.withOnCommitCallback(i => onCommitCallback()), onPushCallback)
+  def withOnCommitCallback(onCommitCallback: () => Unit) =
+    new PersistentBufferAtLeastOnce[T](queue.withOnCommitCallback(i => onCommitCallback()), onPushCallback)
 
   override protected def elementOut(e: Event[T]): Event[T] = e
+
+  def commit[U] = Flow[Event[U]].map { element =>
+    if (!upstreamFailed) {
+      queue.commit(element.outputPortId, element.index)
+      if (upstreamFinished) queueCloserActor ! Committed(element.outputPortId, element.index)
+    }
+    element
+  }
 }
 
 object PersistentBufferAtLeastOnce {
-  def apply[T](config: Config)(implicit serializer: QueueSerializer[T], system: ActorSystem) = new PersistentBufferAtLeastOnce[T](config)
+  def apply[T](config: Config)(implicit serializer: QueueSerializer[T], system: ActorSystem) =
+    new PersistentBufferAtLeastOnce[T](config)
 
-  def apply[T](persistDir: File)(implicit serializer: QueueSerializer[T], system: ActorSystem) = new PersistentBufferAtLeastOnce[T](persistDir)
+  def apply[T](persistDir: File)(implicit serializer: QueueSerializer[T], system: ActorSystem) =
+    new PersistentBufferAtLeastOnce[T](persistDir)
 }

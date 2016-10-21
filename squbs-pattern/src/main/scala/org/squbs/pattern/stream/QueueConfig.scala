@@ -40,13 +40,24 @@ object QueueConfig {
       s => WireType.valueOf(s.toUpperCase)
     } getOrElse defaultWireType
     val blockSize = config.getOption[ConfigMemorySize]("block-size") map (_.toBytes) getOrElse defaultBlockSize
-    val indexSpacing = config.getOption[ConfigMemorySize]("index-spacing") map (_.toBytes.toInt) getOrElse cycle.defaultIndexSpacing
+    val indexSpacing = config.getOption[ConfigMemorySize]("index-spacing").
+      map(_.toBytes.toInt).getOrElse(cycle.defaultIndexSpacing)
     val indexCount = config.get[Int]("index-count", cycle.defaultIndexCount)
     val outputPorts = config.get[Int]("output-ports", defaultOutputPort)
-    val commitOrder = config.getOption[String]("commit-order-policy") map {
-      s => if(s == "strict") Strict else if(s == "lenient") Lenient else throw new BadValue("commit-order-policy", "Allowed values: strict or lenient")
+    val commitOrder = config.getOption[String]("commit-order-policy") map { s =>
+      if(s == "strict") Strict
+      else if(s == "lenient") Lenient
+      else throw new BadValue("commit-order-policy", "Allowed values: strict or lenient")
     } getOrElse defaultCommitOrderPolicy
-    QueueConfig(persistDir, cycle, wireType, blockSize, indexSpacing, indexCount, outputPorts = outputPorts, commitOrderPolicy = commitOrder)
+    QueueConfig(
+      persistDir,
+      cycle,
+      wireType,
+      blockSize,
+      indexSpacing,
+      indexCount,
+      outputPorts = outputPorts,
+      commitOrderPolicy = commitOrder)
   }
 }
 

@@ -30,16 +30,16 @@ import org.slf4j.LoggerFactory
   *
   * '''Emits when''' one of the inputs has an element available
   *
-  * '''Does not back-pressure''' upstream when downstream back-pressures, instead buffers the stream element to memory mapped queue
+  * '''Does not back-pressure''' upstream when downstream back-pressures, instead buffers the stream element to
+  * memory mapped queue
   *
   * '''Completes when''' upstream completes and all downstream finish consuming stream elements
   *
   * '''Cancels when''' downstream cancels
   *
   */
-class BroadcastBuffer[T] private(queue: PersistentQueue[T],
-                                 onPushCallback: () => Unit = () => {})(implicit serializer: QueueSerializer[T],
-                                                                        system: ActorSystem)
+class BroadcastBuffer[T] private(queue: PersistentQueue[T], onPushCallback: () => Unit = () => {})
+                                (implicit serializer: QueueSerializer[T], system: ActorSystem)
   extends BroadcastBufferBase[T, T](queue, onPushCallback)(serializer, system) {
 
   def this(config: Config)(implicit serializer: QueueSerializer[T],
@@ -50,7 +50,8 @@ class BroadcastBuffer[T] private(queue: PersistentQueue[T],
 
   def withOnPushCallback(onPushCallback: () => Unit) = new BroadcastBuffer[T](queue, onPushCallback)
 
-  def withOnCommitCallback(onCommitCallback: Int => Unit) = new BroadcastBuffer[T](queue.withOnCommitCallback(onCommitCallback), onPushCallback)
+  def withOnCommitCallback(onCommitCallback: Int => Unit) =
+    new BroadcastBuffer[T](queue.withOnCommitCallback(onCommitCallback), onPushCallback)
 
 
   override protected def autoCommit(outputPortId: Int, index: Long) = queue.commit(outputPortId, index)
@@ -59,9 +60,11 @@ class BroadcastBuffer[T] private(queue: PersistentQueue[T],
 }
 
 object BroadcastBuffer {
-  def apply[T](config: Config)(implicit serializer: QueueSerializer[T], system: ActorSystem) = new BroadcastBuffer[T](config)
+  def apply[T](config: Config)(implicit serializer: QueueSerializer[T], system: ActorSystem) =
+    new BroadcastBuffer[T](config)
 
-  def apply[T](persistDir: File)(implicit serializer: QueueSerializer[T], system: ActorSystem) = new BroadcastBuffer[T](persistDir)
+  def apply[T](persistDir: File)(implicit serializer: QueueSerializer[T], system: ActorSystem) =
+    new BroadcastBuffer[T](persistDir)
 }
 
 /**
@@ -69,7 +72,8 @@ object BroadcastBuffer {
   *
   * '''Emits when''' one of the inputs has an element available
   *
-  * '''Does not back-pressure''' upstream when downstream back-pressures, instead buffers the stream element to memory mapped queue
+  * '''Does not back-pressure''' upstream when downstream back-pressures, instead buffers the stream element to
+  * memory mapped queue
   *
   * '''Completes when''' upstream completes and all downstream finish consuming stream elements
   *
@@ -92,13 +96,24 @@ class BroadcastBufferAtLeastOnce[T] private(queue: PersistentQueue[T],
 
   def withOnPushCallback(onPushCallback: () => Unit) = new BroadcastBufferAtLeastOnce[T](queue, onPushCallback)
 
-  def withOnCommitCallback(onCommitCallback: Int => Unit) = new BroadcastBufferAtLeastOnce[T](queue.withOnCommitCallback(onCommitCallback), onPushCallback)
+  def withOnCommitCallback(onCommitCallback: Int => Unit) =
+    new BroadcastBufferAtLeastOnce[T](queue.withOnCommitCallback(onCommitCallback), onPushCallback)
 
   override protected def elementOut(e: Event[T]): Event[T] = e
+
+  def commit[U] = Flow[Event[U]].map { element =>
+    if (!upstreamFailed) {
+      queue.commit(element.outputPortId, element.index)
+      if(upstreamFinished) queueCloserActor ! Committed(element.outputPortId, element.index)
+    }
+    element
+  }
 }
 
 object BroadcastBufferAtLeastOnce {
-  def apply[T](config: Config)(implicit serializer: QueueSerializer[T], system: ActorSystem) = new BroadcastBufferAtLeastOnce[T](config)
+  def apply[T](config: Config)(implicit serializer: QueueSerializer[T], system: ActorSystem) =
+    new BroadcastBufferAtLeastOnce[T](config)
 
-  def apply[T](persistDir: File)(implicit serializer: QueueSerializer[T], system: ActorSystem) = new BroadcastBufferAtLeastOnce[T](persistDir)
+  def apply[T](persistDir: File)(implicit serializer: QueueSerializer[T], system: ActorSystem) =
+    new BroadcastBufferAtLeastOnce[T](persistDir)
 }

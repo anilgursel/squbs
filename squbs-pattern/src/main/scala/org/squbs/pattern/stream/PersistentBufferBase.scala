@@ -30,17 +30,19 @@ abstract class PersistentBufferBase[T, S] (private[stream] val queue: Persistent
                                      (implicit serializer: QueueSerializer[T],
                                   system: ActorSystem) extends GraphStage[FlowShape[T, S]] {
 
-  def this(config: Config)(implicit serializer: QueueSerializer[T], system: ActorSystem) = this(new PersistentQueue[T](config))
+  def this(config: Config)(implicit serializer: QueueSerializer[T], system: ActorSystem) =
+    this(new PersistentQueue[T](config))
 
-  def this(persistDir: File)(implicit serializer: QueueSerializer[T], system: ActorSystem) = this(new PersistentQueue[T](persistDir))
+  def this(persistDir: File)(implicit serializer: QueueSerializer[T], system: ActorSystem) =
+    this(new PersistentQueue[T](persistDir))
 
   private[stream] val in = Inlet[T]("PersistentBuffer.in")
   private[stream] val out = Outlet[S]("PersistentBuffer.out")
   val shape: FlowShape[T, S] = FlowShape.of(in, out)
   val defaultOutputPort = 0
-  @volatile private var upstreamFailed = false
-  @volatile private var upstreamFinished = false
-  private val queueCloserActor = system.actorOf(Props(classOf[PersistentQueueCloserActor[T]], queue))
+  @volatile protected var upstreamFailed = false
+  @volatile protected var upstreamFinished = false
+  protected val queueCloserActor = system.actorOf(Props(classOf[PersistentQueueCloserActor[T]], queue))
 
   protected def elementOut(e: Event[T]): S
 
@@ -109,13 +111,5 @@ abstract class PersistentBufferBase[T, S] (private[stream] val queue: Persistent
         }
       }
     })
-  }
-
-  def commit[U] = Flow[Event[U]].map { element =>
-    if (!upstreamFailed) {
-      queue.commit(element.outputPortId, element.index)
-      if (upstreamFinished) queueCloserActor ! Committed(element.outputPortId, element.index)
-    }
-    element
   }
 }

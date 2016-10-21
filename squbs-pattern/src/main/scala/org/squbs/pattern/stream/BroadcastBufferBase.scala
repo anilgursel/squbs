@@ -42,9 +42,9 @@ abstract class BroadcastBufferBase[T, S] (private[stream] val queue: PersistentQ
   private val out = Vector.tabulate(outputPorts)(i ⇒ Outlet[S]("BroadcastBuffer.out" + i))
   private val outWithIndex = out.zipWithIndex
   val shape: UniformFanOutShape[T, S] = UniformFanOutShape(in, out: _*)
-  @volatile private var upstreamFailed = false
-  @volatile private var upstreamFinished = false
-  private val queueCloserActor = system.actorOf(Props(classOf[PersistentQueueCloserActor[T]], queue))
+  @volatile protected var upstreamFailed = false
+  @volatile protected var upstreamFinished = false
+  protected val queueCloserActor = system.actorOf(Props(classOf[PersistentQueueCloserActor[T]], queue))
 
   protected def elementOut(e: Event[T]): S
 
@@ -122,14 +122,6 @@ abstract class BroadcastBufferBase[T, S] (private[stream] val queue: PersistentQ
     outWithIndex foreach { case (currentOut, outputPortId) =>
       setHandler(currentOut, outHandler(currentOut, outputPortId))
     }
-  }
-
-  def commit[U] = Flow[Event[U]].map { element =>
-    if (!upstreamFailed) {
-      queue.commit(element.outputPortId, element.index)
-      if(upstreamFinished) queueCloserActor ! Committed(element.outputPortId, element.index)
-    }
-    element
   }
 }
 
