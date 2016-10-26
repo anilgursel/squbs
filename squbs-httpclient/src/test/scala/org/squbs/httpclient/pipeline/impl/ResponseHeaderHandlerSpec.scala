@@ -23,6 +23,7 @@ import org.squbs.pipeline.{NormalResponse, RequestContext}
 import spray.http.HttpHeaders.RawHeader
 import spray.http.{HttpHeader, HttpRequest, HttpResponse}
 
+/*
 class ResponseHeaderHandlerSpec extends TestKit(ActorSystem("ResponseHeaderHandlerSpec")) with ImplicitSender with FlatSpecLike with Matchers with BeforeAndAfterAll {
 
 	override def afterAll() {
@@ -74,3 +75,4 @@ class ResponseHeaderHandlerSpec extends TestKit(ActorSystem("ResponseHeaderHandl
      updateHttpResponse.headers.head shouldBe httpHeader2
    }
  }
+ */

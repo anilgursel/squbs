@@ -15,12 +15,12 @@
  */
 
 package org.squbs.httpclient.japi
-
+/*
 import java.util.Optional
 
 import akka.actor.ActorSystem
 import org.squbs.httpclient._
-import org.squbs.httpclient.env.{Default, Environment}
+import org.squbs.env.{Default, Environment}
 import org.squbs.pipeline.{PipelineSetting, SimplePipelineConfig}
 import spray.http.HttpResponse
 import spray.httpx.marshalling.Marshaller
@@ -184,3 +184,4 @@ object HttpClientFactory {
 
 
 }
+*/

@@ -18,20 +18,20 @@ package org.squbs.httpclient.demo
 import akka.actor.ActorSystem
 import akka.pattern.CircuitBreakerOpenException
 import org.squbs.httpclient._
-import org.squbs.httpclient.endpoint.{Endpoint, EndpointRegistry, EndpointResolver}
-import org.squbs.httpclient.env.Environment
+import org.squbs.endpoint.{Endpoint, EndpointResolverRegistry, EndpointResolver}
+import org.squbs.env.Environment
 
 import scala.concurrent.duration._
 import scala.language.postfixOps
 import scala.util.{Failure, Success}
-
+/*
 object CircuitBreakerMain1 extends App{
 
   implicit val system = ActorSystem("CircuitBreakerMain1")
   import system.dispatcher
 
 
-  EndpointRegistry(system).register(new EndpointResolver{
+  EndpointResolverRegistry(system).register(new EndpointResolver{
 
     override def resolve(svcName: String, env: Environment): Option[Endpoint] = {
       if (svcName == name) Some(Endpoint("http://localhost:8888")) else None
@@ -69,3 +69,4 @@ object CircuitBreakerMain1 extends App{
     }
   }
 }
+*/

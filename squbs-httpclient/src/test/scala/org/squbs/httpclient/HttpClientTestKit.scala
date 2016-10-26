@@ -19,8 +19,8 @@ package org.squbs.httpclient
 import akka.actor.ActorSystem
 import akka.io.IO
 import akka.pattern._
-import org.squbs.httpclient.endpoint.EndpointRegistry
-import org.squbs.httpclient.env.EnvironmentRegistry
+import org.squbs.endpoint.EndpointResolverRegistry
+import org.squbs.env.EnvironmentRegistry
 import org.squbs.testkit.Timeouts._
 import spray.can.Http
 import spray.util._
@@ -28,9 +28,9 @@ import spray.util._
 trait HttpClientTestKit {
 
   implicit val system: ActorSystem
-
+/*
   def clearHttpClient() = {
-    EndpointRegistry(system).endpointResolvers.clear()
+    EndpointResolverRegistry(system).endpointResolvers.clear()
     EnvironmentRegistry(system).environmentResolvers.clear()
     HttpClientManager(system).httpClientMap.clear()
   }
@@ -39,4 +39,5 @@ trait HttpClientTestKit {
     IO(Http).ask(Http.CloseAll)(awaitMax).await
     system.shutdown()
   }
+  */
 }

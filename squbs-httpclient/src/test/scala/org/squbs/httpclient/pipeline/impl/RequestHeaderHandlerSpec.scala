@@ -23,6 +23,7 @@ import org.squbs.pipeline.RequestContext
 import spray.http.HttpHeaders.RawHeader
 import spray.http.{HttpHeader, HttpRequest}
 
+/*
 class RequestHeaderHandlerSpec extends TestKit(ActorSystem("RequestHeaderHandlerSpecSys"))
 with ImplicitSender with FlatSpecLike with Matchers with BeforeAndAfterAll {
 
@@ -89,3 +90,4 @@ with ImplicitSender with FlatSpecLike with Matchers with BeforeAndAfterAll {
     updateHttpRequest.headers.find(_.name == "name3").get.value should be("value3")
   }
 }
+*/

@@ -18,18 +18,18 @@ package org.squbs.httpclient.jdemo;
 
 import akka.actor.ActorSystem;
 import akka.dispatch.OnComplete;
-import org.squbs.httpclient.endpoint.EndpointRegistry;
-import org.squbs.httpclient.japi.HttpClientFactory;
+import org.squbs.endpoint.EndpointResolverRegistry;
 import scala.concurrent.Future;
 
 import java.util.Collections;
 import java.util.List;
 
+/*
 public class HttpClientDemo2 {
 
     public static void main(String[] args) {
         final ActorSystem system = ActorSystem.apply("HttpClientDemo1");
-        EndpointRegistry.get(system).register(new GoogleMapAPIEndpointResolver(system));
+        EndpointResolverRegistry.get(system).register(new GoogleMapAPIEndpointResolver(system));
         Future<ElevationResult> responseFuture = HttpClientFactory.get("GoogleMap", system).
                 get("/api/elevation/json?locations=27.988056,86.925278&sensor=false", ElevationResult.class);
         responseFuture.onComplete(new OnComplete<ElevationResult>() {
@@ -114,3 +114,4 @@ public class HttpClientDemo2 {
         }
     }
 }
+*/

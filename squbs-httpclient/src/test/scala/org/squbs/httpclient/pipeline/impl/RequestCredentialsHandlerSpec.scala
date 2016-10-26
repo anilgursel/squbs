@@ -22,6 +22,7 @@ import org.scalatest.{BeforeAndAfterAll, FlatSpecLike, Matchers}
 import org.squbs.pipeline.RequestContext
 import spray.http.{BasicHttpCredentials, HttpRequest, OAuth2BearerToken}
 
+/*
 class RequestCredentialsHandlerSpec extends TestKit(ActorSystem("RequestCredentialsHandlerSpecSys"))
     with ImplicitSender with FlatSpecLike with Matchers with BeforeAndAfterAll {
 
@@ -53,3 +54,4 @@ class RequestCredentialsHandlerSpec extends TestKit(ActorSystem("RequestCredenti
 		updateHttpRequest.headers.head.value should be("Basic dXNlcm5hbWU6cGFzc3dvcmQ=")
 	}
 }
+*/

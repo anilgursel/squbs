@@ -17,10 +17,9 @@
 package org.squbs.httpclient.jdemo;
 
 import akka.actor.ActorSystem;
-import org.squbs.httpclient.endpoint.Endpoint;
-import org.squbs.httpclient.env.Environment;
+import org.squbs.endpoint.Endpoint;
+import org.squbs.env.Environment;
 import org.squbs.httpclient.japi.AbstractEndpointResolver;
-import org.squbs.httpclient.japi.EndpointFactory;
 import scala.Option;
 
 public class GoogleMapAPIEndpointResolver extends AbstractEndpointResolver {
@@ -40,7 +39,7 @@ public class GoogleMapAPIEndpointResolver extends AbstractEndpointResolver {
     public Option<Endpoint> resolve(String svcName, Environment env) {
         Option<Endpoint> response;
         if (name().equals(svcName))
-            response = Option.apply(EndpointFactory.create("http://maps.googleapis.com/maps", system));
+            response = Option.apply(Endpoint.create("http://maps.googleapis.com/maps"));
         else
             response = Option.empty();
         return response;
