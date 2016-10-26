@@ -27,7 +27,7 @@ import org.scalatest.{BeforeAndAfterAll, FlatSpecLike, Matchers}
 import org.squbs.httpclient.dummy.DummyService._
 import org.squbs.httpclient.dummy._
 import org.squbs.endpoint.{Endpoint, EndpointResolverRegistry}
-import org.squbs.httpclient.japi.{EmployeeBean, TeamBean, TeamBeanWithCaseClassMember}
+//import org.squbs.httpclient.japi.{EmployeeBean, TeamBean, TeamBeanWithCaseClassMember}
 import org.squbs.httpclient.json.{JacksonProtocol, Json4sJacksonNoTypeHintsProtocol, JsonProtocol}
 import org.squbs.pipeline.PipelineSetting
 import org.squbs.testkit.Timeouts._

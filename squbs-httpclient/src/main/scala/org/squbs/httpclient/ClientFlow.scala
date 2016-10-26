@@ -18,8 +18,8 @@ package org.squbs.httpclient
 
 import akka.actor.ActorSystem
 import akka.http.scaladsl.settings.ConnectionPoolSettings
-import akka.http.scaladsl.{ConnectionContext, HttpConnectionContext, HttpsConnectionContext, Http}
-import akka.http.scaladsl.Http.{HostConnectionPool, OutgoingConnection}
+import akka.http.scaladsl.{ConnectionContext, HttpsConnectionContext, Http}
+import akka.http.scaladsl.Http.HostConnectionPool
 import akka.http.scaladsl.model.{HttpResponse, HttpRequest}
 import akka.stream.Materializer
 import akka.stream.scaladsl.Flow
@@ -27,7 +27,6 @@ import com.typesafe.config.Config
 import org.squbs.endpoint.EndpointResolverRegistry
 import org.squbs.env.{EnvironmentRegistry, Default, Environment}
 
-import scala.concurrent.Future
 import scala.util.Try
 
 class ClientFlow {
