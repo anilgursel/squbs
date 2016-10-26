@@ -22,7 +22,7 @@ import akka.http.scaladsl.model._
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Sink, Source}
 import akka.util.ByteString
-import org.scalatest.{BeforeAndAfterAll, FlatSpec, Matchers}
+import org.scalatest.{BeforeAndAfterAll, AsyncFlatSpec, Matchers}
 import org.squbs.endpoint.{Endpoint, EndpointResolver, EndpointResolverRegistry}
 import org.squbs.env.Environment
 import org.squbs.testkit.Timeouts._
@@ -30,7 +30,7 @@ import org.squbs.testkit.Timeouts._
 import scala.concurrent.{Future, Await}
 import scala.util.{Success, Try}
 
-class ClientFlowSpec  extends FlatSpec with Matchers with BeforeAndAfterAll {
+object ClientFlowSpec {
 
   implicit val system = ActorSystem("ClientFlowSpec")
   implicit val materializer = ActorMaterializer()
@@ -46,6 +46,11 @@ class ClientFlowSpec  extends FlatSpec with Matchers with BeforeAndAfterAll {
 
   val serverBinding = Await.result(Http().bindAndHandle(route, "localhost", 0), awaitMax)
   val port = serverBinding.localAddress.getPort
+}
+
+class ClientFlowSpec  extends AsyncFlatSpec with Matchers with BeforeAndAfterAll {
+
+  import ClientFlowSpec._
 
   override def afterAll: Unit = {
     serverBinding.unbind() map {_ => system.terminate()}
@@ -75,7 +80,7 @@ class ClientFlowSpec  extends FlatSpec with Matchers with BeforeAndAfterAll {
 
   }
 
-  it should "not resolve an invalid client" in {
-
-  }
+//  it should "not resolve an invalid client" in {
+//
+//  }
 }
