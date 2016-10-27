@@ -48,14 +48,9 @@ object ClientFlow {
       case _ => env
     }
 
-    val endpoint = EndpointResolverRegistry(system).resolve(name, env) getOrElse {
-      throw HttpClientEndpointNotExistException(name, env)
+    val endpoint = EndpointResolverRegistry(system).resolve(name, environment) getOrElse {
+      throw HttpClientEndpointNotExistException(name, environment)
     }
-
-    import org.squbs.unicomplex.ConfigUtil._
-    val systemConfig = system.settings.config
-    val clientConfig = systemConfig.getOption[Config](name) map {_.withFallback(systemConfig)} getOrElse systemConfig
-    val connectionPoolSettings = ConnectionPoolSettings(clientConfig)
 
     if(endpoint.uri.getScheme == "https") {
       val httpsConnectionContext = connectionContext orElse {
@@ -65,11 +60,11 @@ object ClientFlow {
       Http().cachedHostConnectionPoolHttps(endpoint.uri.getHost,
                                            endpoint.uri.getPort,
                                            httpsConnectionContext,
-                                           connectionPoolSettings)
+                                           connectionPoolSettings(name, system.settings.config, settings))
     } else {
       Http().cachedHostConnectionPool(endpoint.uri.getHost,
                                       endpoint.uri.getPort,
-                                      connectionPoolSettings)
+                                      connectionPoolSettings(name, system.settings.config, settings))
     }
 
     // If Https, get SSLContext..  Probably with the above step (endpoint resolver)    -- done
@@ -80,5 +75,17 @@ object ClientFlow {
     // If https, actually call cachedHostconnectionPoolHttps                           -- done
     // Check the configuration if there is any pipeline setting
     // If yes, wrap it with the bidi and return.
+  }
+
+  private[httpclient] def connectionPoolSettings(name: String, config: Config,
+                                                 settings: Option[ConnectionPoolSettings]) = {
+
+    // TODO how come this unicomplex utility is sneaking here?  Should not be visible..
+    import org.squbs.unicomplex.ConfigUtil._
+    val clientConfig = config.getOption[Config](name).filter(_.getOption[String]("type") == Some("squbs.httpclient")) map {
+      _.withFallback(config)
+    } getOrElse config
+
+    settings getOrElse { ConnectionPoolSettings(clientConfig) }
   }
 }
