@@ -22,10 +22,11 @@ import akka.http.scaladsl.{ConnectionContext, HttpsConnectionContext, Http}
 import akka.http.scaladsl.Http.HostConnectionPool
 import akka.http.scaladsl.model.{HttpResponse, HttpRequest}
 import akka.stream.Materializer
-import akka.stream.scaladsl.Flow
+import akka.stream.scaladsl.{Keep, Flow}
 import com.typesafe.config.Config
 import org.squbs.endpoint.EndpointResolverRegistry
 import org.squbs.env.{EnvironmentRegistry, Default, Environment}
+import org.squbs.pipeline.streaming.{RequestContext, PipelineExtension}
 
 import scala.util.Try
 
@@ -34,11 +35,13 @@ class ClientFlow {
 }
 
 object ClientFlow {
+
+  type ClientConnectionFlow[T] = Flow[(HttpRequest, T), (Try[HttpResponse], T), HostConnectionPool]
+
   def apply[T](name: String,
               connectionContext: Option[HttpsConnectionContext] = None,
               settings: Option[ConnectionPoolSettings] = None,
-              env: Environment = Default)(implicit system: ActorSystem, fm: Materializer):
-  Flow[(HttpRequest, T), (Try[HttpResponse], T), HostConnectionPool] = {
+              env: Environment = Default)(implicit system: ActorSystem, fm: Materializer): ClientConnectionFlow[T] = {
 
     // Check HttpClientManager if we already have initialized this  -- why?  Why not directly call cacedHostConnectionPool and let it deal..
     // we might need to do some statistics updates though for JMX
@@ -52,20 +55,23 @@ object ClientFlow {
       throw HttpClientEndpointNotExistException(name, environment)
     }
 
-    if(endpoint.uri.getScheme == "https") {
-      val httpsConnectionContext = connectionContext orElse {
-        endpoint.sslContext map { sc => ConnectionContext.https(sc) }
-      } getOrElse Http().defaultClientHttpsContext
+    val clientConnectionFlow =
+      if (endpoint.uri.getScheme == "https") {
+        val httpsConnectionContext = connectionContext orElse {
+          endpoint.sslContext map { sc => ConnectionContext.https(sc) }
+        } getOrElse Http().defaultClientHttpsContext
 
-      Http().cachedHostConnectionPoolHttps(endpoint.uri.getHost,
-                                           endpoint.uri.getPort,
-                                           httpsConnectionContext,
-                                           connectionPoolSettings(name, system.settings.config, settings))
-    } else {
-      Http().cachedHostConnectionPool(endpoint.uri.getHost,
-                                      endpoint.uri.getPort,
-                                      connectionPoolSettings(name, system.settings.config, settings))
-    }
+        Http().cachedHostConnectionPoolHttps[RequestContext](endpoint.uri.getHost,
+          endpoint.uri.getPort,
+          httpsConnectionContext,
+          connectionPoolSettings(name, system.settings.config, settings))
+      } else {
+        Http().cachedHostConnectionPool[RequestContext](endpoint.uri.getHost,
+          endpoint.uri.getPort,
+          connectionPoolSettings(name, system.settings.config, settings))
+      }
+
+    withPipeline[T](name, system.settings.config, clientConnectionFlow)
 
     // If Https, get SSLContext..  Probably with the above step (endpoint resolver)    -- done
     // Check if `ConnectionPoolSettings` is passed in.                                 -- done
@@ -73,8 +79,8 @@ object ClientFlow {
     // If Configuration does not have at all, call the api with out the settings       -- n/a
     // Http().cachedHostConnectionPool with the above configuration,                   -- done
     // If https, actually call cachedHostconnectionPoolHttps                           -- done
-    // Check the configuration if there is any pipeline setting
-    // If yes, wrap it with the bidi and return.
+    // Check the configuration if there is any pipeline setting                        -- done
+    // If yes, wrap it with the bidi and return.                                       -- done
   }
 
   private[httpclient] def connectionPoolSettings(name: String, config: Config,
@@ -87,5 +93,45 @@ object ClientFlow {
     } getOrElse config
 
     settings getOrElse { ConnectionPoolSettings(clientConfig) }
+  }
+
+  private[httpclient] def withPipeline[T](name: String, config: Config,
+                                          clientConnectionFlow: ClientConnectionFlow[RequestContext])
+                                          (implicit system: ActorSystem): ClientConnectionFlow[T] = {
+
+    import org.squbs.unicomplex.ConfigUtil._
+    val pipelineName = config.getOption[String](s"$name.pipeline")
+    val defaultFlowsOn = config.getOption[Boolean](s"$name.defaultPipelineOn")
+
+
+    val hcToRc = Flow[(HttpRequest, T)].map { case (request, t) => RequestContext(request, 0).++("userContext" -> t) }
+    // TODO Fix this..  Need to change RequestContext API
+    val rcToHc = Flow[RequestContext].map { case rc => (Try { rc.response.get }, rc.attribute[T]("userContext").get) }
+
+
+    PipelineExtension(system).getFlow((pipelineName, defaultFlowsOn)) match {
+      case Some(pipeline) =>
+        hcToRc
+          .viaMat(pipeline.joinMat(fromToRequestContext(clientConnectionFlow))(Keep.right))(Keep.right)
+          .viaMat(rcToHc)(Keep.left)
+      case None =>
+        hcToRc
+          .viaMat(fromToRequestContext(clientConnectionFlow))(Keep.right)
+          .viaMat(rcToHc)(Keep.left)
+    }
+  }
+
+  def fromToRequestContext(clientConnectionFlow: ClientConnectionFlow[RequestContext]):
+  Flow[RequestContext, RequestContext, HostConnectionPool] = {
+
+    val fromRc = Flow[RequestContext].map { case rc =>
+      (rc.request, rc)
+    }
+    val toRc = Flow[(Try[HttpResponse], RequestContext)].map {
+      // TODO We lose failure details here.  Probably need to change RequestContext API
+      case (responseTry, rc) => rc.copy(response = responseTry.toOption)
+    }
+
+    fromRc.viaMat(clientConnectionFlow)(Keep.right).via(toRc)
   }
 }
