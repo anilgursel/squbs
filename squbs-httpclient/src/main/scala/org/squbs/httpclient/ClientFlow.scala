@@ -21,8 +21,8 @@ import akka.http.scaladsl.settings.ConnectionPoolSettings
 import akka.http.scaladsl.{ConnectionContext, HttpsConnectionContext, Http}
 import akka.http.scaladsl.Http.HostConnectionPool
 import akka.http.scaladsl.model.{HttpResponse, HttpRequest}
-import akka.stream.Materializer
-import akka.stream.scaladsl.{Keep, Flow}
+import akka.stream.{FlowShape, Materializer}
+import akka.stream.scaladsl.{GraphDSL, Keep, Flow}
 import com.typesafe.config.Config
 import org.squbs.endpoint.EndpointResolverRegistry
 import org.squbs.env.{EnvironmentRegistry, Default, Environment}
@@ -36,6 +36,7 @@ class ClientFlow {
 
 object ClientFlow {
 
+  val AkkaHttpClientCustomContext = "akka-http-client-custom-context"
   type ClientConnectionFlow[T] = Flow[(HttpRequest, T), (Try[HttpResponse], T), HostConnectionPool]
 
   def apply[T](name: String,
@@ -103,30 +104,53 @@ object ClientFlow {
     val pipelineName = config.getOption[String](s"$name.pipeline")
     val defaultFlowsOn = config.getOption[Boolean](s"$name.defaultPipelineOn")
 
-
-    val hcToRc = Flow[(HttpRequest, T)].map { case (request, t) => RequestContext(request, 0).++("userContext" -> t) }
-    // TODO Fix this..  Need to change RequestContext API
-    val rcToHc = Flow[RequestContext].map { case rc => (Try { rc.response.get }, rc.attribute[T]("userContext").get) }
-
-
     PipelineExtension(system).getFlow((pipelineName, defaultFlowsOn)) match {
       case Some(pipeline) =>
-        hcToRc
-          .viaMat(pipeline.joinMat(fromToRequestContext(clientConnectionFlow))(Keep.right))(Keep.right)
-          .viaMat(rcToHc)(Keep.left)
+        val toRequestContext = Flow[(HttpRequest, T)].map { case (request, t) =>
+          RequestContext(request, 0).++(AkkaHttpClientCustomContext -> t)
+        }
+        // TODO Fix this..  Need to change RequestContext API
+        val fromRequestContext = Flow[RequestContext].map { rc =>
+          (Try { rc.response.get }, rc.attribute[T](AkkaHttpClientCustomContext).get)
+        }
+        val clientConnectionFlowWithPipeline = pipeline.joinMat(pipelineAdapter(clientConnectionFlow))(Keep.right)
+
+        // Materializes to HostConnectionPool
+        Flow.fromGraph( GraphDSL.create(toRequestContext, clientConnectionFlowWithPipeline, fromRequestContext)
+                                       ((_, hostConnectionPool, _) => hostConnectionPool) { implicit b =>
+                                       (toRequestContext, clientConnectionFlowWithPipeline, fromRequestContext) =>
+          import GraphDSL.Implicits._
+
+          toRequestContext ~> clientConnectionFlowWithPipeline ~> fromRequestContext
+
+          FlowShape(toRequestContext.in, fromRequestContext.out)
+        })
       case None =>
-        hcToRc
-          .viaMat(fromToRequestContext(clientConnectionFlow))(Keep.right)
-          .viaMat(rcToHc)(Keep.left)
+        val customContextToRequestContext = Flow[(HttpRequest, T)].map { case (request, t) =>
+          (request, RequestContext(request, 0).++(AkkaHttpClientCustomContext -> t))
+        }
+        // TODO Fix this..  Need to change RequestContext API
+        val requestContextToCustomContext =
+          Flow[(Try[HttpResponse], RequestContext)].map { case (tryHttpResponse, rc) =>
+            (tryHttpResponse, rc.attribute[T](AkkaHttpClientCustomContext).get)
+        }
+
+        // Materializes to HostConnectionPool
+        Flow.fromGraph( GraphDSL.create(customContextToRequestContext, clientConnectionFlow, requestContextToCustomContext)
+                                       ((_, hostConnectionPool, _) => hostConnectionPool) { implicit b =>
+                                       (customContextToRequestContext, clientConnectionFlow, requestContextToCustomContext) =>
+            import GraphDSL.Implicits._
+
+            customContextToRequestContext ~> clientConnectionFlow ~> requestContextToCustomContext
+
+            FlowShape(customContextToRequestContext.in, requestContextToCustomContext.out)
+        })
     }
   }
 
-  def fromToRequestContext(clientConnectionFlow: ClientConnectionFlow[RequestContext]):
+  def pipelineAdapter(clientConnectionFlow: ClientConnectionFlow[RequestContext]):
   Flow[RequestContext, RequestContext, HostConnectionPool] = {
-
-    val fromRc = Flow[RequestContext].map { case rc =>
-      (rc.request, rc)
-    }
+    val fromRc = Flow[RequestContext].map { rc => (rc.request, rc) }
     val toRc = Flow[(Try[HttpResponse], RequestContext)].map {
       // TODO We lose failure details here.  Probably need to change RequestContext API
       case (responseTry, rc) => rc.copy(response = responseTry.toOption)

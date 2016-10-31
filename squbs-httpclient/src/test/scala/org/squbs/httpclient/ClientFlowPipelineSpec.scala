@@ -115,12 +115,12 @@ class ClientFlowPipelineSpec  extends AsyncFlatSpec with Matchers with BeforeAnd
       RawHeader("keyPreOutbound", "valPreOutbound"),
       RawHeader("keyPostOutbound", "valPostOutbound")).sortBy(_.name)
 
-    val expectedEntity = (Seq(
+    val expectedEntity = Seq(
       RawHeader("keyA", "valA"),
       RawHeader("keyB", "valB"),
       RawHeader("keyC", "valC"),
       RawHeader("keyPreInbound", "valPreInbound"),
-      RawHeader("keyPostInbound", "valPostInbound")).sortBy(_.name).mkString(","))
+      RawHeader("keyPostInbound", "valPostInbound")).sortBy(_.name).mkString(",")
 
     assertPipeline("clientWithCustomPipelineWithDefaults", expectedResponseHeaders, expectedEntity)
   }
@@ -166,7 +166,7 @@ class ClientFlowPipelineSpec  extends AsyncFlatSpec with Matchers with BeforeAnd
     userContext shouldBe 42 // Make sure we keep user context
 
     response.status should be (StatusCodes.OK)
-    response.headers.filter(_.name.startsWith("key")).sortBy(_.name) should equal(expectedResponseHeaders)
+    response.headers.filter(_.name.startsWith("key")) should contain theSameElementsAs expectedResponseHeaders
     val entity = response.entity.dataBytes.runFold(ByteString(""))(_ ++ _) map(_.utf8String)
     entity map { e => e shouldEqual expectedEntity }
   }
@@ -191,33 +191,24 @@ class DummyFlow extends PipelineFlowFactory {
     })
   }
 
-  val dummyBidi = BidiFlow.fromGraph(GraphDSL.create() { implicit b =>
-    val requestFlow = b.add(Flow[RequestContext].map { rc => rc.addRequestHeaders(RawHeader("keyC", "valC")) } )
-    val responseFlow = b.add(Flow[RequestContext])
-    BidiShape.fromFlows(requestFlow, responseFlow)
-  })
+  val requestFlow = Flow[RequestContext].map { rc => rc.addRequestHeaders(RawHeader("keyC", "valC")) }
+  val dummyBidi =  BidiFlow.fromFlows(requestFlow, Flow[RequestContext])
 }
 
 class PreFlow extends PipelineFlowFactory {
 
   override def create(implicit system: ActorSystem): PipelineFlow = {
-
-    BidiFlow.fromGraph(GraphDSL.create() { implicit b =>
-      val inbound = b.add(Flow[RequestContext].map { rc => rc.addRequestHeaders(RawHeader("keyPreInbound", "valPreInbound")) })
-      val outbound = b.add(Flow[RequestContext].map { rc => rc.addResponseHeaders(RawHeader("keyPreOutbound", "valPreOutbound")) })
-      BidiShape.fromFlows(inbound, outbound)
-    })
+    val inbound = Flow[RequestContext].map { rc => rc.addRequestHeaders(RawHeader("keyPreInbound", "valPreInbound")) }
+    val outbound = Flow[RequestContext].map { rc => rc.addResponseHeaders(RawHeader("keyPreOutbound", "valPreOutbound")) }
+    BidiFlow.fromFlows(inbound, outbound)
   }
 }
 
 class PostFlow extends PipelineFlowFactory {
 
   override def create(implicit system: ActorSystem): PipelineFlow = {
-
-    BidiFlow.fromGraph(GraphDSL.create() { implicit b =>
-      val inbound = b.add(Flow[RequestContext].map { rc => rc.addRequestHeaders(RawHeader("keyPostInbound", "valPostInbound")) })
-      val outbound = b.add(Flow[RequestContext].map { rc => rc.addResponseHeaders(RawHeader("keyPostOutbound", "valPostOutbound")) })
-      BidiShape.fromFlows(inbound, outbound)
-    })
+    val inbound = Flow[RequestContext].map { rc => rc.addRequestHeaders(RawHeader("keyPostInbound", "valPostInbound")) }
+    val outbound = Flow[RequestContext].map { rc => rc.addResponseHeaders(RawHeader("keyPostOutbound", "valPostOutbound")) }
+    BidiFlow.fromFlows(inbound, outbound)
   }
 }
