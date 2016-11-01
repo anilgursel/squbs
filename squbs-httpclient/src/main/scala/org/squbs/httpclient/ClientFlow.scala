@@ -106,20 +106,21 @@ object ClientFlow {
 
     PipelineExtension(system).getFlow((pipelineName, defaultFlowsOn)) match {
       case Some(pipeline) =>
-        val toRequestContext = Flow[(HttpRequest, T)].map { case (request, t) =>
-          RequestContext(request, 0).++(AkkaHttpClientCustomContext -> t)
+        val tupleToRequestContext = Flow[(HttpRequest, T)].map { case (request, t) =>
+          RequestContext(request, 0) ++ (AkkaHttpClientCustomContext -> t)
         }
         // TODO Fix this..  Need to change RequestContext API
-        val fromRequestContext = Flow[RequestContext].map { rc =>
+        val fromRequestContextToTuple = Flow[RequestContext].map { rc =>
           (Try { rc.response.get }, rc.attribute[T](AkkaHttpClientCustomContext).get)
         }
         val clientConnectionFlowWithPipeline = pipeline.joinMat(pipelineAdapter(clientConnectionFlow))(Keep.right)
 
-        // Materializes to HostConnectionPool
-        Flow.fromGraph( GraphDSL.create(toRequestContext, clientConnectionFlowWithPipeline, fromRequestContext)
-                                       ((_, hostConnectionPool, _) => hostConnectionPool) { implicit b =>
-                                       (toRequestContext, clientConnectionFlowWithPipeline, fromRequestContext) =>
+        Flow.fromGraph( GraphDSL.create(clientConnectionFlowWithPipeline) { implicit b =>
+          clientConnectionFlowWithPipeline =>
           import GraphDSL.Implicits._
+
+          val toRequestContext = b.add(tupleToRequestContext)
+          val fromRequestContext = b.add(fromRequestContextToTuple)
 
           toRequestContext ~> clientConnectionFlowWithPipeline ~> fromRequestContext
 
@@ -127,7 +128,7 @@ object ClientFlow {
         })
       case None =>
         val customContextToRequestContext = Flow[(HttpRequest, T)].map { case (request, t) =>
-          (request, RequestContext(request, 0).++(AkkaHttpClientCustomContext -> t))
+          (request, RequestContext(request, 0) ++ (AkkaHttpClientCustomContext -> t))
         }
         // TODO Fix this..  Need to change RequestContext API
         val requestContextToCustomContext =
@@ -135,15 +136,15 @@ object ClientFlow {
             (tryHttpResponse, rc.attribute[T](AkkaHttpClientCustomContext).get)
         }
 
-        // Materializes to HostConnectionPool
-        Flow.fromGraph( GraphDSL.create(customContextToRequestContext, clientConnectionFlow, requestContextToCustomContext)
-                                       ((_, hostConnectionPool, _) => hostConnectionPool) { implicit b =>
-                                       (customContextToRequestContext, clientConnectionFlow, requestContextToCustomContext) =>
-            import GraphDSL.Implicits._
+        Flow.fromGraph( GraphDSL.create(clientConnectionFlow) { implicit b => clientConnectionFlow =>
+          import GraphDSL.Implicits._
 
-            customContextToRequestContext ~> clientConnectionFlow ~> requestContextToCustomContext
+          val toRequestContext = b.add(customContextToRequestContext)
+          val fromRequestContext = b.add(requestContextToCustomContext)
 
-            FlowShape(customContextToRequestContext.in, requestContextToCustomContext.out)
+          toRequestContext ~> clientConnectionFlow ~> fromRequestContext
+
+          FlowShape(toRequestContext.in, fromRequestContext.out)
         })
     }
   }
