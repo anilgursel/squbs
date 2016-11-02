@@ -82,16 +82,16 @@ class PipelineExtensionSpec extends TestKit(ActorSystem("PipelineExtensionSpec",
 
   it should "throw IllegalArgumentException when getFlow is called with a bad flow name" in {
     intercept[IllegalArgumentException] {
-      pipelineExtension.getFlow(Some("badPipelineName"), Some(true))
+      pipelineExtension.getFlow((Some("badPipelineName"), Some(true)))
     }
   }
 
   it should "return None when no custom flow exists and defaults are off" in {
-    pipelineExtension.getFlow(None, Some(false)) should be (None)
+    pipelineExtension.getFlow((None, Some(false))) should be (None)
   }
 
   it should "build the flow with defaults when defaultsOn param is set to None" in {
-    pipelineExtension.getFlow(None, None) should not be (None)
+    pipelineExtension.getFlow((None, None)) should not be (None)
   }
 }
 
@@ -151,7 +151,7 @@ class PipelineExtensionSpec3 extends TestKit(ActorSystem("PipelineExtensionSpec3
   }
 
   it should "return None when no custom flow exists and no defaults specified in config" in {
-    pipelineExtension.getFlow(None, Some(true)) should be (None)
+    pipelineExtension.getFlow((None, Some(true))) should be (None)
   }
 
   it should "be able to build the flow when no defaults are specified in config" in {
@@ -173,7 +173,7 @@ class PipelineExtensionSpec3 extends TestKit(ActorSystem("PipelineExtensionSpec3
 
 class DummyFlow1 extends PipelineFlowFactory {
 
-  override def create(implicit system: ActorSystem): PipelineFlow = {
+  override def create(context: Map[String, Any])(implicit system: ActorSystem): PipelineFlow = {
 
     BidiFlow.fromGraph(GraphDSL.create() { implicit b =>
       import GraphDSL.Implicits._
@@ -199,7 +199,7 @@ class DummyFlow1 extends PipelineFlowFactory {
 
 class PreFlow extends PipelineFlowFactory {
 
-  override def create(implicit system: ActorSystem): PipelineFlow = {
+  override def create(context: Map[String, Any])(implicit system: ActorSystem): PipelineFlow = {
 
     BidiFlow.fromGraph(GraphDSL.create() { implicit b =>
       val inbound = b.add(Flow[RequestContext].map { rc => rc.addRequestHeaders(RawHeader("keyPreInbound", "valPreInbound")) })
@@ -211,7 +211,7 @@ class PreFlow extends PipelineFlowFactory {
 
 class PostFlow extends PipelineFlowFactory {
 
-  override def create(implicit system: ActorSystem): PipelineFlow = {
+  override def create(context: Map[String, Any])(implicit system: ActorSystem): PipelineFlow = {
 
     BidiFlow.fromGraph(GraphDSL.create() { implicit b =>
       val inbound = b.add(Flow[RequestContext].map { rc => rc.addRequestHeaders(RawHeader("keyPostInbound", "valPostInbound")) })

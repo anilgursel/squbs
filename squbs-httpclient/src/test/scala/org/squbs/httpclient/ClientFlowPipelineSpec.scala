@@ -174,7 +174,7 @@ class ClientFlowPipelineSpec  extends AsyncFlatSpec with Matchers with BeforeAnd
 
 class DummyFlow extends PipelineFlowFactory {
 
-  override def create(implicit system: ActorSystem): PipelineFlow = {
+  override def create(context: Map[String, Any])(implicit system: ActorSystem): PipelineFlow = {
 
     BidiFlow.fromGraph(GraphDSL.create() { implicit b =>
       import GraphDSL.Implicits._
@@ -197,7 +197,7 @@ class DummyFlow extends PipelineFlowFactory {
 
 class PreFlow extends PipelineFlowFactory {
 
-  override def create(implicit system: ActorSystem): PipelineFlow = {
+  override def create(context: Map[String, Any])(implicit system: ActorSystem): PipelineFlow = {
     val inbound = Flow[RequestContext].map { rc => rc.addRequestHeaders(RawHeader("keyPreInbound", "valPreInbound")) }
     val outbound = Flow[RequestContext].map { rc => rc.addResponseHeaders(RawHeader("keyPreOutbound", "valPreOutbound")) }
     BidiFlow.fromFlows(inbound, outbound)
@@ -206,7 +206,7 @@ class PreFlow extends PipelineFlowFactory {
 
 class PostFlow extends PipelineFlowFactory {
 
-  override def create(implicit system: ActorSystem): PipelineFlow = {
+  override def create(context: Map[String, Any])(implicit system: ActorSystem): PipelineFlow = {
     val inbound = Flow[RequestContext].map { rc => rc.addRequestHeaders(RawHeader("keyPostInbound", "valPostInbound")) }
     val outbound = Flow[RequestContext].map { rc => rc.addResponseHeaders(RawHeader("keyPostOutbound", "valPostOutbound")) }
     BidiFlow.fromFlows(inbound, outbound)
