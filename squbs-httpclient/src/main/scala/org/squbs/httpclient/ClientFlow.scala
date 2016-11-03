@@ -104,7 +104,7 @@ object ClientFlow {
     val pipelineName = config.getOption[String](s"$name.pipeline")
     val defaultFlowsOn = config.getOption[Boolean](s"$name.defaultPipelineOn")
 
-    PipelineExtension(system).getFlow((pipelineName, defaultFlowsOn)) match {
+    PipelineExtension(system).getFlow((pipelineName, defaultFlowsOn), Map("name" -> name)) match {
       case Some(pipeline) =>
         val tupleToRequestContext = Flow[(HttpRequest, T)].map { case (request, t) =>
           RequestContext(request, 0) ++ (AkkaHttpClientCustomContext -> t)

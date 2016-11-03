@@ -18,4 +18,6 @@ object Versions {
   val akkaV = "2.4.11"
   val sprayV = "1.3.3"
   val scalatestV = "3.0.0"
+  val shapelessV = "2.3.2"
+  val metricsV = "3.1.0"
 }
