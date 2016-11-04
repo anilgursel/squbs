@@ -28,7 +28,7 @@ import org.squbs.endpoint.EndpointResolverRegistry
 import org.squbs.env.{EnvironmentRegistry, Default, Environment}
 import org.squbs.pipeline.streaming.{RequestContext, PipelineExtension}
 
-import scala.util.Try
+import scala.util.{Failure, Try}
 
 class ClientFlow {
 
@@ -109,9 +109,11 @@ object ClientFlow {
         val tupleToRequestContext = Flow[(HttpRequest, T)].map { case (request, t) =>
           RequestContext(request, 0) ++ (AkkaHttpClientCustomContext -> t)
         }
-        // TODO Fix this..  Need to change RequestContext API
+
         val fromRequestContextToTuple = Flow[RequestContext].map { rc =>
-          (Try { rc.response.get }, rc.attribute[T](AkkaHttpClientCustomContext).get)
+          ( rc.response.getOrElse(Failure(new RuntimeException("Empty HttpResponse in client Pipeline"))),
+            rc.attribute[T](AkkaHttpClientCustomContext).get)
+          // TODO What to do if `AkkaHttpClientCustomContext` somehow got deleted in the pipeline?
         }
         val clientConnectionFlowWithPipeline = pipeline.joinMat(pipelineAdapter(clientConnectionFlow))(Keep.right)
 
@@ -130,7 +132,7 @@ object ClientFlow {
         val customContextToRequestContext = Flow[(HttpRequest, T)].map { case (request, t) =>
           (request, RequestContext(request, 0) ++ (AkkaHttpClientCustomContext -> t))
         }
-        // TODO Fix this..  Need to change RequestContext API
+
         val requestContextToCustomContext =
           Flow[(Try[HttpResponse], RequestContext)].map { case (tryHttpResponse, rc) =>
             (tryHttpResponse, rc.attribute[T](AkkaHttpClientCustomContext).get)
@@ -153,8 +155,7 @@ object ClientFlow {
   Flow[RequestContext, RequestContext, HostConnectionPool] = {
     val fromRc = Flow[RequestContext].map { rc => (rc.request, rc) }
     val toRc = Flow[(Try[HttpResponse], RequestContext)].map {
-      // TODO We lose failure details here.  Probably need to change RequestContext API
-      case (responseTry, rc) => rc.copy(response = responseTry.toOption)
+      case (responseTry, rc) => rc.copy(response = Option(responseTry))
     }
 
     fromRc.viaMat(clientConnectionFlow)(Keep.right).via(toRc)

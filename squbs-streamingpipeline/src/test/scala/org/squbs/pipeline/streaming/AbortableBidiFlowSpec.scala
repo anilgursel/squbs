@@ -28,6 +28,7 @@ import org.scalatest.{Matchers, FlatSpecLike}
 import org.squbs.pipeline.streaming.Timeouts._
 
 import scala.concurrent.{Future, Await}
+import scala.util.{Success, Try}
 
 class AbortableBidiFlowSpec extends TestKit(ActorSystem("AbortableBidiFlowSpec", AbortableBidiFlowSpec.config))
   with FlatSpecLike with Matchers {
@@ -35,7 +36,7 @@ class AbortableBidiFlowSpec extends TestKit(ActorSystem("AbortableBidiFlowSpec",
   implicit val am = ActorMaterializer()
   val pipelineExtension = PipelineExtension(system)
   val dummyEndpoint = Flow[RequestContext].map { rc =>
-    rc.copy(response = Some(HttpResponse(entity = s"${rc.request.headers.sortBy(_.name).mkString(",")}")))
+    rc.copy(response = Some(Try(HttpResponse(entity = s"${rc.request.headers.sortBy(_.name).mkString(",")}"))))
   }
 
   it should "run the entire flow" in {
@@ -47,7 +48,7 @@ class AbortableBidiFlowSpec extends TestKit(ActorSystem("AbortableBidiFlowSpec",
     val rc = Await.result(future, awaitMax)
 
     rc.response should not be (None)
-    val httpResponse = rc.response.get
+    val Some(Success(httpResponse)) = rc.response
     httpResponse.headers.sortBy(_.name) should equal(Seq(RawHeader("keyE", "valE"),
                                                          RawHeader("keyC2", "valC2"),
                                                          RawHeader("keyF", "valF"),
@@ -74,7 +75,7 @@ class AbortableBidiFlowSpec extends TestKit(ActorSystem("AbortableBidiFlowSpec",
     val rc = Await.result(future, awaitMax)
 
     rc.response should not be (None)
-    val httpResponse = rc.response.get
+    val Some(Success(httpResponse)) = rc.response
 
     httpResponse.headers.sortBy(_.name) should equal(Seq( RawHeader("keyC2", "valC2"),
                                                           RawHeader("keyF", "valF"),

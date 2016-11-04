@@ -28,6 +28,7 @@ import org.scalatest.{Matchers, FlatSpecLike}
 import Timeouts._
 
 import scala.concurrent.Await
+import scala.util.{Success, Try}
 
 class PipelineExtensionSpec extends TestKit(ActorSystem("PipelineExtensionSpec", PipelineExtensionSpec.config))
   with FlatSpecLike with Matchers {
@@ -35,7 +36,7 @@ class PipelineExtensionSpec extends TestKit(ActorSystem("PipelineExtensionSpec",
   implicit val am = ActorMaterializer()
   val pipelineExtension = PipelineExtension(system)
   val dummyEndpoint = Flow[RequestContext].map { r =>
-    r.copy(response = Some(HttpResponse(entity = s"${r.request.headers.sortBy(_.name).mkString(",")}")))
+    r.copy(response = Some(Try(HttpResponse(entity = s"${r.request.headers.sortBy(_.name).mkString(",")}"))))
   }
 
   it should "build the flow with defaults" in {
@@ -47,7 +48,7 @@ class PipelineExtensionSpec extends TestKit(ActorSystem("PipelineExtensionSpec",
     val rc = Await.result(future, awaitMax)
 
     rc.response should not be (None)
-    val httpResponse = rc.response.get
+    val Some(Success(httpResponse)) = rc.response
     httpResponse.headers.sortBy(_.name) should equal(Seq(RawHeader("keyD", "valD"),
                                                          RawHeader("keyPreOutbound", "valPreOutbound"),
                                                          RawHeader("keyPostOutbound", "valPostOutbound")).sortBy(_.name))
@@ -70,7 +71,7 @@ class PipelineExtensionSpec extends TestKit(ActorSystem("PipelineExtensionSpec",
     val rc = Await.result(future, awaitMax)
 
     rc.response should not be (None)
-    val httpResponse = rc.response.get
+    val Some(Success(httpResponse)) = rc.response
     httpResponse.headers should equal(Seq(RawHeader("keyD", "valD")))
     import system.dispatcher
     val actualEntity = Await.result(httpResponse.entity.dataBytes.runFold(ByteString(""))(_ ++ _) map(_.utf8String), awaitMax)
@@ -147,7 +148,7 @@ class PipelineExtensionSpec3 extends TestKit(ActorSystem("PipelineExtensionSpec3
   implicit val am = ActorMaterializer()
   val pipelineExtension = PipelineExtension(system)
   val dummyEndpoint = Flow[RequestContext].map { r =>
-    r.copy(response = Some(HttpResponse(entity = s"${r.request.headers.sortBy(_.name).mkString(",")}")))
+    r.copy(response = Some(Try(HttpResponse(entity = s"${r.request.headers.sortBy(_.name).mkString(",")}"))))
   }
 
   it should "return None when no custom flow exists and no defaults specified in config" in {
@@ -163,7 +164,7 @@ class PipelineExtensionSpec3 extends TestKit(ActorSystem("PipelineExtensionSpec3
     val rc = Await.result(future, awaitMax)
 
     rc.response should not be (None)
-    val httpResponse = rc.response.get
+    val Some(Success(httpResponse)) = rc.response
     httpResponse.headers should equal(Seq(RawHeader("keyD", "valD")))
     import system.dispatcher
     val entity = Await.result(httpResponse.entity.dataBytes.runFold(ByteString(""))(_ ++ _) map(_.utf8String), awaitMax)

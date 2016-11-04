@@ -21,6 +21,8 @@ import akka.stream.scaladsl.{Flow, BidiFlow}
 import com.codahale.metrics.{Timer, MetricRegistry}
 import org.squbs.pipeline.streaming._
 
+import scala.util.{Try, Failure, Success}
+
 object MetricsFlow {
 
   def apply(name: String)(implicit system: ActorSystem) = {
@@ -43,15 +45,17 @@ object MetricsFlow {
     val outbound = Flow[RequestContext].map { rc =>
       rc.attribute[Timer.Context](requestTime) map {_.stop()}
 
-      // TODO Once RequestContext API is changed to Option[Try[HttpResponse]],
-      // we should create a meter for each exception count
-      rc.response map { case response =>
-        val statusCode = response.status.intValue()
+      rc.response map {
+        case Success(response) =>
+          val statusCode = response.status.intValue()
 
-        if(statusCode >= 500) metrics.meter(count5XX).mark()
-        else if(statusCode >= 400) metrics.meter(count4XX).mark()
-        else if(statusCode >= 300) metrics.meter(count3XX).mark()
-        else if(statusCode >= 200) metrics.meter(count2XX).mark()
+          if(statusCode >= 500) metrics.meter(count5XX).mark()
+          else if(statusCode >= 400) metrics.meter(count4XX).mark()
+          else if(statusCode >= 300) metrics.meter(count3XX).mark()
+          else if(statusCode >= 200) metrics.meter(count2XX).mark()
+        case Failure(ex) =>
+          val causeExceptionClass = Try(ex.getCause.getClass.getSimpleName) getOrElse ex.getClass.getSimpleName
+          metrics.meter(MetricRegistry.name(domain, s"$name-$causeExceptionClass-count")).mark()
       }
 
       rc

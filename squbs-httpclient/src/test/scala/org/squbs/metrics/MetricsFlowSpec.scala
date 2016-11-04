@@ -21,9 +21,10 @@ import javax.management.ObjectName
 
 import akka.actor.ActorSystem
 import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.{HttpResponse, StatusCodes, HttpRequest}
+import akka.http.scaladsl.model.ws.PeerClosedConnectionException
+import akka.http.scaladsl.model.{RequestTimeoutException, HttpResponse, StatusCodes, HttpRequest}
 import akka.stream.ActorMaterializer
-import akka.stream.scaladsl.{Sink, Source}
+import akka.stream.scaladsl.{BidiFlow, Flow, Sink, Source}
 import com.typesafe.config.ConfigFactory
 import org.scalatest.{AsyncFlatSpec, BeforeAndAfterAll, Matchers}
 import org.squbs.endpoint.{EndpointResolverRegistry, Endpoint, EndpointResolver}
@@ -33,9 +34,9 @@ import org.squbs.pipeline.streaming._
 import org.squbs.testkit.Timeouts._
 
 import scala.concurrent.{Future, Await}
-import scala.util.{Success, Try}
+import scala.util.{Failure, Success}
 
-object MetricFlowSpec {
+object MetricsFlowSpec {
 
   val config = ConfigFactory.parseString(
     s"""
@@ -50,6 +51,16 @@ object MetricFlowSpec {
        |
        |sampleClient {
        |  type = squbs.httpclient
+       |}
+       |
+       |sampleClient6 {
+       |  type = squbs.httpclient
+       |  pipeline = failure
+       |}
+       |
+       |failure {
+       |  type = squbs.pipelineflow
+       |  factory = org.squbs.metrics.FailureFlow
        |}
     """.stripMargin
   )
@@ -78,9 +89,9 @@ object MetricFlowSpec {
   val port = serverBinding.localAddress.getPort
 }
 
-class MetricFlowSpec extends AsyncFlatSpec with Matchers with BeforeAndAfterAll {
+class MetricsFlowSpec extends AsyncFlatSpec with Matchers with BeforeAndAfterAll {
 
-  import MetricFlowSpec._
+  import MetricsFlowSpec._
   import system.dispatcher
 
   override def afterAll: Unit = {
@@ -140,6 +151,22 @@ class MetricFlowSpec extends AsyncFlatSpec with Matchers with BeforeAndAfterAll 
     }
   }
 
+  it should "collect metrics for exceptions" in {
+    val f = for {
+      hello <- callServiceTwice("sampleClient6", "/hello")
+      connectionException <- callService("sampleClient6", "/connectionException")
+      connectionException2 <- callService("sampleClient6", "/connectionException")
+      timeoutException <- callServiceTwice("sampleClient6", "/timeoutException")
+    } yield List(hello, connectionException, connectionException2, timeoutException)
+
+    f map { _ =>
+      assertJmxValue("sampleClient6-request-count", "Count", 6)
+      assertJmxValue("sampleClient6-2XX-count", "Count", 2)
+      assertJmxValue("sampleClient6-PeerClosedConnectionException-count", "Count", 2)
+      assertJmxValue("sampleClient6-RequestTimeoutException-count", "Count", 2)
+    }
+  }
+
   def assertJmxValue(beanName: String, key: String, expectedValue: Any) = {
     val oName = ObjectName.getInstance(s"${MetricsExtension(system).Domain}:name=${MetricsExtension(system).Domain}.$beanName")
     val actualValue = ManagementFactory.getPlatformMBeanServer.getAttribute(oName, key)
@@ -156,14 +183,20 @@ class MetricFlowSpec extends AsyncFlatSpec with Matchers with BeforeAndAfterAll 
     val clientFlow = ClientFlow[Int](clientName)
     Source.single(HttpRequest(uri = path) -> 42)
       .via(clientFlow)
-      .runWith(Sink.foreach{ case(Success(response), _) => response.discardEntityBytes()})
+      .runWith(Sink.foreach{
+        case(Success(response), _) => response.discardEntityBytes()
+        case _ =>
+      })
   }
 
   private def callServiceTwice(clientName: String, path: String) = {
     val clientFlow = ClientFlow[Int](clientName)
     Source(HttpRequest(uri = path) -> 42 :: HttpRequest(uri = path) -> 43 :: Nil)
       .via(clientFlow)
-      .runWith(Sink.foreach{ case(Success(response), _) => response.discardEntityBytes()})
+      .runWith(Sink.foreach{
+        case(Success(response), _) => response.discardEntityBytes()
+        case _ =>
+      })
   }
 }
 
@@ -171,5 +204,20 @@ class DefaultFlow extends PipelineFlowFactory {
 
   override def create(context: Map[String, Any])(implicit system: ActorSystem): PipelineFlow = {
     MetricsFlow(context("name").asInstanceOf[String])
+  }
+}
+
+class FailureFlow extends PipelineFlowFactory {
+
+  override def create(context: Map[String, Any])(implicit system: ActorSystem): PipelineFlow = {
+    val inbound = Flow[RequestContext]
+    val outbound = Flow[RequestContext].map { rc =>
+      rc.request.getUri().path() match {
+        case "/connectionException" => rc.copy(response = Some(Failure(new  PeerClosedConnectionException(0, ""))))
+        case "/timeoutException" => rc.copy(response = Some(Failure(new  RuntimeException(RequestTimeoutException(rc.request, "")))))
+        case _ => rc
+      }
+    }
+    BidiFlow.fromFlows(inbound, outbound)
   }
 }

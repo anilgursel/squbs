@@ -39,17 +39,17 @@ object ClientFlowPipelineSpec {
     s"""
        |dummyFlow {
        |  type = squbs.pipelineflow
-       |  factory = org.squbs.unicomplex.streaming.pipeline.DummyFlow
+       |  factory = org.squbs.httpclient.DummyFlow
        |}
        |
        |preFlow {
        |  type = squbs.pipelineflow
-       |  factory = org.squbs.unicomplex.streaming.pipeline.PreFlow
+       |  factory = org.squbs.httpclient.PreFlow
        |}
        |
        |postFlow {
        |  type = squbs.pipelineflow
-       |  factory = org.squbs.unicomplex.streaming.pipeline.PostFlow
+       |  factory = org.squbs.httpclient.PostFlow
        |}
        |
        |squbs.pipeline.streaming.defaults {
