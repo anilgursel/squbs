@@ -27,7 +27,7 @@ import org.squbs.env.{QA, Environment}
 
 import scala.concurrent.duration.Duration
 
-object HttpClientJMXSpec {
+object HttpClientConfigMXBeanSpec {
 
   val config = ConfigFactory.parseString(
     """
@@ -91,7 +91,7 @@ object HttpClientJMXSpec {
       |}
     """.stripMargin).withFallback(ConfigFactory.load())
 
-  implicit val system = ActorSystem("HttpClientJMXSpec", config)
+  implicit val system = ActorSystem("HttpClientConfigMXBeanSpec", config)
   implicit val materializer = ActorMaterializer()
 
   EndpointResolverRegistry(system).register(new EndpointResolver {
@@ -103,9 +103,9 @@ object HttpClientJMXSpec {
   })
 }
 
-class HttpClientJMXSpec extends FlatSpecLike with Matchers {
+class HttpClientConfigMXBeanSpec extends FlatSpecLike with Matchers {
 
-  import HttpClientJMXSpec._
+  import HttpClientConfigMXBeanSpec._
 
   it should "show the configuration of an http client" in {
     import org.squbs.util.ConfigUtil._

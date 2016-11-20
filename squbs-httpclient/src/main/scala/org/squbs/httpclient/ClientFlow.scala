@@ -69,6 +69,7 @@ object ClientFlow {
         val defaults = clientConfigWithDefaults.getConfig("ssl-config")
         val sslConfig = AkkaSSLConfig().withSettings(SSLConfigFactory.parse(akkaOverrides withFallback defaults))
 
+        // TODO We need to check here whether sslConfig needs to be parsed or not..
         val httpsConnectionContext = connectionContext orElse {
           endpoint.sslContext map { sc => ConnectionContext.https(sc, Some(sslConfig)) }
         } getOrElse Http().defaultClientHttpsContext

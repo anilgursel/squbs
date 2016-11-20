@@ -77,7 +77,7 @@ object ClientFlowHttpsSpec {
     val ks: KeyStore = KeyStore.getInstance("JKS")
     val keystore: InputStream = getClass.getClassLoader.getResourceAsStream("ClientFlowHttpsSpec/" + store)
 
-    require(keystore != null, "Keystore required!")
+    require(Option(keystore).nonEmpty, "Keystore required!")
     ks.load(keystore, password)
 
     val keyManagerFactory: KeyManagerFactory = KeyManagerFactory.getInstance("SunX509")

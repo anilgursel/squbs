@@ -17,12 +17,7 @@ package org.squbs.httpclient
 
 import javax.management.MXBean
 
-import akka.http.scaladsl.model.Uri.ParsingMode.{Relaxed, Strict}
 import akka.http.scaladsl.settings.ConnectionPoolSettings
-import akka.http.scaladsl.settings.ParserSettings.CookieParsingMode.{RFC6265, Raw}
-import akka.http.scaladsl.settings.ParserSettings.ErrorLoggingVerbosity.{Full, Off, Simple}
-import akka.http.scaladsl.settings.ParserSettings.IllegalResponseHeaderValueProcessingMode
-import akka.http.scaladsl.settings.ParserSettings.IllegalResponseHeaderValueProcessingMode.{Ignore, Warn}
 import akka.io.Inet.SO.{ReceiveBufferSize, ReuseAddress, SendBufferSize, TrafficClass}
 import akka.io.Tcp.SO.{KeepAlive, OOBInline, TcpNoDelay}
 
