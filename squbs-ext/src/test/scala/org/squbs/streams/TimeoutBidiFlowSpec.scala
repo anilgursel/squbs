@@ -1,0 +1,170 @@
+/*
+ * Copyright 2015 PayPal
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.squbs.streams
+
+import java.util.UUID
+
+import akka.actor.{Actor, ActorSystem, Props}
+import akka.stream.{ActorMaterializer, FlowShape}
+import akka.stream.scaladsl._
+import akka.testkit.TestKit
+import akka.util.Timeout
+import org.scalatest.{AsyncFlatSpecLike, Matchers}
+
+import scala.concurrent.duration._
+import scala.util.{Failure, Success}
+
+class TimeoutBidiFlowSpec extends TestKit(ActorSystem("TimeoutBidiFlowSpec")) with AsyncFlatSpecLike with Matchers{
+
+  implicit val materializer = ActorMaterializer()
+
+  val timeout = 60 milliseconds
+  val timeoutFailure = Failure(FlowTimeoutException("Flow timed out!"))
+
+  it should "timeout a message if the flow does not process it within provided timeout" in {
+    import scala.concurrent.duration._
+
+    val flow = Flow.fromGraph(GraphDSL.create() { implicit b =>
+      import GraphDSL.Implicits._
+
+      val partition = b.add(Partition(3, (s: String) => s match {
+        case "a" => 0
+        case "b" => 1
+        case "c" => 2
+      }))
+
+      val merge = b.add(Merge[String](3))
+
+      partition.out(0).delay(10 milliseconds)  ~> merge
+      partition.out(1).delay(100 milliseconds) ~> merge
+      partition.out(2).delay(10 milliseconds)  ~> merge
+
+      FlowShape(partition.in, merge.out)
+    })
+
+    val timeoutFlow = TimeoutBidiFlowOrdered[String, String](timeout)
+
+    val result = Source("a" :: "b" :: "c" :: Nil).via(timeoutFlow.join(flow)).runWith(Sink.seq)
+    // "c" fails because of slowness of "b"
+    val expected = Success("a") :: timeoutFailure :: Success("c") :: Nil
+    result map { _ should contain theSameElementsAs expected }
+  }
+
+  it should "work for flows that keep the order of messages" in {
+    val delayActor = system.actorOf(Props[DelayActor])
+    import akka.pattern.ask
+    implicit val askTimeout = Timeout(5.seconds)
+    val flow = Flow[String].mapAsync(3)(elem => (delayActor ? elem).mapTo[String])
+
+    val timeoutBidiFlow = TimeoutBidiFlowOrdered[String, String](timeout)
+
+    val result = Source("a" :: "b" :: "c" :: Nil).via(timeoutBidiFlow.join(flow)).runWith(Sink.seq)
+    // "c" fails because of slowness of "b"
+    val expected = Success("a") :: timeoutFailure :: timeoutFailure :: Nil
+    result map { _ should contain theSameElementsInOrderAs expected }
+  }
+
+  it should "let the wrapped ordered flow control the demand" in {
+    val delayActor = system.actorOf(Props[DelayActor])
+    import akka.pattern.ask
+    implicit val askTimeout = Timeout(5.seconds)
+    val flow = Flow[String].mapAsync(2)(elem => (delayActor ? elem).mapTo[String])
+
+    val timeoutBidiFlow = TimeoutBidiFlowOrdered[String, String](timeout)
+
+    val result = Source("a" :: "b" :: "c" :: "c" :: "a" :: "a" :: Nil).via(timeoutBidiFlow.join(flow)).runWith(Sink.seq)
+    // The first "c" fails because of slowness of "b".  With mapAsync(2), subsequent messages should not be delayed.
+    val expected = Success("a") :: timeoutFailure :: timeoutFailure :: Success("c") :: Success("a") :: Success("a") :: Nil
+    result map { _ should contain theSameElementsInOrderAs expected }
+  }
+
+  it should "let the wrapped unordered flow control the demand" in {
+    val delayActor = system.actorOf(Props[DelayActor])
+    import akka.pattern.ask
+    implicit val askTimeout = Timeout(5.seconds)
+    val flow = Flow[(Long, String)].mapAsyncUnordered(1) { elem =>
+      (delayActor ? elem).mapTo[(Long, String)]
+    }
+
+    val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String](timeout)
+    val result = Source("a" :: "b" :: "c" :: "c" :: "a" :: "a" :: Nil).via(timeoutBidiFlow.join(flow)).runWith(Sink.seq)
+    val expected = Success("a") :: timeoutFailure :: Success("c") :: Success("c") :: Success("a") :: Success("a") :: Nil
+    result map { _ should contain theSameElementsAs expected }
+  }
+
+  it should "not complete the flow until timeout messages are sent when the ordered wrapped flow drop messages" in {
+    val flow = Flow[String].filter(_ => false)
+    val timeoutBidiFlow = TimeoutBidiFlowOrdered[String, String](timeout)
+
+    val result = Source("a" :: "b" :: "c" :: Nil).via(timeoutBidiFlow.join(flow)).runWith(Sink.seq)
+    val expected = timeoutFailure :: timeoutFailure :: timeoutFailure :: Nil
+    result map { _ should contain theSameElementsInOrderAs expected }
+  }
+
+  it should "not complete the flow until timeout messages are sent when the unordered wrapped flow drop messages" in {
+    val flow = Flow[(Long, String)].filter(_ => false)
+    val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String](timeout)
+    val result = Source("a" :: "b" :: "c" :: Nil).via(timeoutBidiFlow.join(flow)).runWith(Sink.seq)
+    val expected = timeoutFailure :: timeoutFailure :: timeoutFailure :: Nil
+    result map { _ should contain theSameElementsAs expected }
+  }
+
+  it should "work for flows that do not keep the order of messages" in {
+    val delayActor = system.actorOf(Props[DelayActor])
+    import akka.pattern.ask
+    implicit val askTimeout = Timeout(5.seconds)
+    val flow = Flow[(Long, String)].mapAsyncUnordered(3) { elem =>
+      (delayActor ? elem).mapTo[(Long, String)]
+    }
+
+    val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String](timeout)
+    val result = Source("a" :: "b" :: "c" :: Nil).via(timeoutBidiFlow.join(flow)).runWith(Sink.seq)
+    // "c" does NOT fail because the original flow lets it go earlier than "b"
+    val expected = Success("a") :: timeoutFailure :: Success("c") :: Nil
+    result map { _ should contain theSameElementsAs expected }
+  }
+
+  it should "allow a custom id generator to be passed in for flows that do not keep the order of messages" in {
+    val delayActor = system.actorOf(Props[DelayActor])
+    import akka.pattern.ask
+    implicit val askTimeout = Timeout(5.seconds)
+    val flow = Flow[(UUID, String)].mapAsyncUnordered(3) { elem =>
+      (delayActor ? elem).mapTo[(UUID, String)]
+    }
+
+    val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String, UUID](timeout, () => UUID.randomUUID())
+
+    val result = Source("a" :: "b" :: "c" :: Nil).via(timeoutBidiFlow.join(flow)).runWith(Sink.seq)
+    // "c" does NOT fail because the original flow lets it go earlier than "b"
+    val expected = Success("a") :: timeoutFailure :: Success("c") :: Nil
+    result map { _ should contain theSameElementsAs expected }
+  }
+}
+
+class DelayActor extends Actor {
+
+  val delay = Map("a" -> 30.milliseconds, "b" -> 200.milliseconds, "c" -> 30.milliseconds)
+
+  def receive = {
+    case element: String =>
+      import context.dispatcher
+      context.system.scheduler.scheduleOnce(delay(element), sender(), element)
+    case element: (Long, String) =>
+      import context.dispatcher
+      context.system.scheduler.scheduleOnce(delay(element._2), sender(), element)
+  }
+}
