@@ -58,8 +58,7 @@ import scala.util.{Failure, Success, Try}
   *
   * @param timeout Duration after which a message should be considered timed out.
   */
-// TODO Temporarily pass system, will get rid of it
-class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)(implicit system: ActorSystem)
+class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
   extends GraphStage[BidiShape[In, In, Try[Out], Try[Out]]] {
   val in = Inlet[In]("CircuitBreakerBidi.in")
   val fromWrapped = Inlet[Try[Out]]("CircuitBreakerBidi.fromWrapped")
@@ -69,8 +68,9 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)(implicit system: Acto
   private var downstreamDemand = 0
   private var upstreamFinished = false
   val readyToPush = mutable.Queue[Try[Out]]()
+  private[this] def timerName = "CircuitBreakerBidi"
 
-  val cb = CircuitBreaker(3, 20 milliseconds, 30 milliseconds)
+  val cb = CircuitBreaker(3, timeout, 30 milliseconds)
 
   def onPushFromWrapped(elem: Try[Out], isOutAvailable: Boolean): Option[Try[Out]] = {
     readyToPush.enqueue(elem)
@@ -86,7 +86,7 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)(implicit system: Acto
 
   override def initialAttributes = Attributes.name("CircuitBreakerBidi")
 
-  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
+  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new TimerGraphStageLogic(shape) {
 
     setHandler(in, new InHandler {
       override def onPush(): Unit = {
@@ -116,7 +116,7 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)(implicit system: Acto
         elem match {
             // TODO add metrics code here
           case Success(_) => cb.succeed()
-          case Failure(_) => cb.fail()
+          case Failure(_) => cb.fail().foreach(scheduleOnce(timerName, _))
         }
         onPushFromWrapped(elem, isAvailable(out)) foreach { elem =>
           push(out, elem)
@@ -143,6 +143,10 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)(implicit system: Acto
       }
       override def onDownstreamFinish(): Unit = cancel(fromWrapped)
     })
+
+    override def onTimer(timerKey: Any): Unit = {
+      cb.attemptReset()
+    }
   }
 
   override def toString = "CircuitBreakerBidi"

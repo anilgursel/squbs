@@ -38,8 +38,7 @@ object CircuitBreaker {
     * @param callTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to consider a call a failure
     * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
     */
-  def apply(maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration)
-           (implicit system: ActorSystem): CircuitBreaker =
+  def apply(maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration): CircuitBreaker =
     new CircuitBreaker(maxFailures, callTimeout, resetTimeout)
   /**
     * Java API: Create a new CircuitBreaker.
@@ -53,8 +52,8 @@ object CircuitBreaker {
     * @param callTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to consider a call a failure
     * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
     */
-  def create(maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration, system: ActorSystem): CircuitBreaker =
-    apply(maxFailures, callTimeout, resetTimeout)(system)
+  def create(maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration): CircuitBreaker =
+    apply(maxFailures, callTimeout, resetTimeout)
 }
 
 /**
@@ -80,11 +79,11 @@ class CircuitBreaker( maxFailures:              Int,
                       val callTimeout:          FiniteDuration,
                       resetTimeout:             FiniteDuration,
                       maxResetTimeout:          FiniteDuration,
-                      exponentialBackoffFactor: Double)(implicit system: ActorSystem) extends AbstractCircuitBreaker {
+                      exponentialBackoffFactor: Double) extends AbstractCircuitBreaker {
 
   require(exponentialBackoffFactor >= 1.0, "factor must be >= 1.0")
 
-  def this(maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration)(implicit system: ActorSystem) = {
+  def this(maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration) = {
     this(maxFailures, callTimeout, resetTimeout, 36500.days, 1.0)
   }
 
@@ -158,7 +157,7 @@ class CircuitBreaker( maxFailures:              Int,
     * caller Actor. In such a case, it is convenient to mark a failed call instead of using Future
     * via [[withCircuitBreaker]]
     */
-  def fail(): Unit = {
+  def fail(): Option[FiniteDuration] = {
     currentState.callFails()
   }
 
@@ -294,7 +293,7 @@ class CircuitBreaker( maxFailures:              Int,
     * Attempts to reset breaker by transitioning to a half-open state.  This is valid from an Open state only.
     *
     */
-  private def attemptReset(): Unit = transition(Open, HalfOpen)
+  def attemptReset(): Unit = transition(Open, HalfOpen)
 
   private val timeoutFuture = Future.failed(new TimeoutException("Circuit Breaker Timed out.") with NoStackTrace)
 
@@ -345,7 +344,7 @@ class CircuitBreaker( maxFailures:              Int,
       * Invoked when call fails
       *
       */
-    def callFails(): Unit
+    def callFails(): Option[FiniteDuration]
 
     /**
       * Invoked on the transitioned-to state during transition.  Notifies listeners after invoking subclass template
@@ -389,7 +388,11 @@ class CircuitBreaker( maxFailures:              Int,
       *
       * @return
       */
-    override def callFails(): Unit = if (incrementAndGet() == maxFailures) tripBreaker(Closed)
+    override def callFails(): Option[FiniteDuration] =
+      if (incrementAndGet() == maxFailures) {
+        tripBreaker(Closed)
+        Some(currentResetTimeout)
+      } else None
 
     /**
       * On entry of this state, failure count and resetTimeout is reset.
@@ -434,7 +437,17 @@ class CircuitBreaker( maxFailures:              Int,
       *
       * @return
       */
-    override def callFails(): Unit = tripBreaker(HalfOpen)
+    override def callFails(): Option[FiniteDuration] = {
+      tripBreaker(HalfOpen)
+      val nextResetTimeout = currentResetTimeout * exponentialBackoffFactor match {
+        case f: FiniteDuration ⇒ f
+        case _                 ⇒ currentResetTimeout
+      }
+
+      if (nextResetTimeout < maxResetTimeout)
+        swapResetTimeout(currentResetTimeout, nextResetTimeout)
+      Some(currentResetTimeout)
+    }
 
     /**
       * On entry, guard should be reset for that first call to get in
@@ -487,7 +500,7 @@ class CircuitBreaker( maxFailures:              Int,
       *
       * @return
       */
-    override def callFails(): Unit = ()
+    override def callFails(): Option[FiniteDuration] = None
 
     /**
       * On entering this state, schedule an attempted reset via [[akka.actor.Scheduler]] and store the entry time to
@@ -495,20 +508,7 @@ class CircuitBreaker( maxFailures:              Int,
       *
       * @return
       */
-    override def _enter(): Unit = {
-      set(System.nanoTime())
-      import system.dispatcher
-      system.scheduler.scheduleOnce(currentResetTimeout) {
-        attemptReset()
-      }
-      val nextResetTimeout = currentResetTimeout * exponentialBackoffFactor match {
-        case f: FiniteDuration ⇒ f
-        case _                 ⇒ currentResetTimeout
-      }
-
-      if (nextResetTimeout < maxResetTimeout)
-        swapResetTimeout(currentResetTimeout, nextResetTimeout)
-    }
+    override def _enter(): Unit = set(System.nanoTime())
 
     /**
       * Override for more descriptive toString
