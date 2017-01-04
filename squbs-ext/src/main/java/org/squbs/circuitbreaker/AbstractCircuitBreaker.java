@@ -24,8 +24,8 @@ class AbstractCircuitBreaker {
 
     static {
         try {
-            stateOffset = Unsafe.instance.objectFieldOffset(akka.pattern.CircuitBreaker.class.getDeclaredField("_currentStateDoNotCallMeDirectly"));
-            resetTimeoutOffset = Unsafe.instance.objectFieldOffset(akka.pattern.CircuitBreaker.class.getDeclaredField("_currentResetTimeoutDoNotCallMeDirectly"));
+            stateOffset = Unsafe.instance.objectFieldOffset(CircuitBreaker.class.getDeclaredField("_currentStateDoNotCallMeDirectly"));
+            resetTimeoutOffset = Unsafe.instance.objectFieldOffset(CircuitBreaker.class.getDeclaredField("_currentResetTimeoutDoNotCallMeDirectly"));
         } catch(Throwable t){
             throw new ExceptionInInitializerError(t);
         }

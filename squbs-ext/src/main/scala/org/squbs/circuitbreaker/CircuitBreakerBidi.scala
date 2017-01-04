@@ -21,6 +21,7 @@ import java.util.concurrent.TimeoutException
 import java.util.function.Supplier
 
 import akka.NotUsed
+import akka.actor.ActorSystem
 import akka.stream.{Attributes, BidiShape, Inlet, Outlet}
 import akka.stream.scaladsl.BidiFlow
 import akka.stream.stage._
@@ -57,27 +58,46 @@ import scala.util.{Failure, Success, Try}
   *
   * @param timeout Duration after which a message should be considered timed out.
   */
-abstract class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
+// TODO Temporarily pass system, will get rid of it
+class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)(implicit system: ActorSystem)
   extends GraphStage[BidiShape[In, In, Try[Out], Try[Out]]] {
   val in = Inlet[In]("CircuitBreakerBidi.in")
   val fromWrapped = Inlet[Try[Out]]("CircuitBreakerBidi.fromWrapped")
   val toWrapped = Outlet[In]("CircuitBreakerBidi.toWrapped")
   val out = Outlet[Try[Out]]("CircuitBreakerBidi.out")
   val shape = BidiShape(in, toWrapped, fromWrapped, out)
+  private var downstreamDemand = 0
+  private var upstreamFinished = false
+  val readyToPush = mutable.Queue[Try[Out]]()
 
-  def onPushFromWrapped(elem: Try[Out], isOutAvailable: Boolean): Option[Try[Out]]
+  val cb = CircuitBreaker(3, 20 milliseconds, 30 milliseconds)
 
-  def onPullOut(): Option[Try[Out]]
+  def onPushFromWrapped(elem: Try[Out], isOutAvailable: Boolean): Option[Try[Out]] = {
+    readyToPush.enqueue(elem)
+    if(isOutAvailable) Some(readyToPush.dequeue())
+    else None
+  }
+
+  def onPullOut(): Option[Try[Out]] = {
+    Try(readyToPush.dequeue()).toOption
+  }
+
+  def isBuffersEmpty(): Boolean = readyToPush.isEmpty
 
   override def initialAttributes = Attributes.name("CircuitBreakerBidi")
 
-  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) with InHandler with OutHandler {
+  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
     setHandler(in, new InHandler {
       override def onPush(): Unit = {
         val elem = grab(in)
-        if(circuitBreaker.state.isShortCircuit)
-        push(toWrapped, elem)
+        if(cb.shortCircuit()) {
+          // TODO Need to have fallback check here before sending an exception.
+          if(isAvailable(out)) push(out, Failure(CircuitBreakerOpenException()))
+          else readyToPush.enqueue(Failure(CircuitBreakerOpenException()))
+          // TODO Add to internal buffer.  This alltogether might be an onShortCircuit.  Moving it to internal buffers
+          // and return an Option, like in timeout flow.
+        } else push(toWrapped, elem)
       }
       override def onUpstreamFinish(): Unit = complete(toWrapped)
       override def onUpstreamFailure(ex: Throwable): Unit = fail(toWrapped, ex)
@@ -85,19 +105,21 @@ abstract class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
 
     setHandler(toWrapped, new OutHandler {
       override def onPull(): Unit = {
-        pull(in)
+        if(!hasBeenPulled(in)) pull(in)
       }
       override def onDownstreamFinish(): Unit = completeStage()
     })
 
     setHandler(fromWrapped, new InHandler {
       override def onPush(): Unit = {
-        onPushFromWrapped(grab(fromWrapped), isAvailable(out)) map { elem =>
-          push(out, elem)
+        val elem = grab(fromWrapped)
+        elem match {
+            // TODO add metrics code here
+          case Success(_) => cb.succeed()
+          case Failure(_) => cb.fail()
         }
-        if(downstreamDemand > 0) {
-          pull(fromWrapped)
-          downstreamDemand -= 1
+        onPushFromWrapped(elem, isAvailable(out)) foreach { elem =>
+          push(out, elem)
         }
       }
       override def onUpstreamFinish(): Unit = {
@@ -113,11 +135,10 @@ abstract class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
         if(!upstreamFinished || !isBuffersEmpty()) {
           onPullOut() match {
             case Some(elem) => push(out, elem)
-            case None => if (!isTimerActive(timerName)) scheduleOnce(timerName, timeLeftForNextElemToTimeout().millis)
+            case None =>
+              if(!hasBeenPulled(fromWrapped)) pull(fromWrapped)
+              else if(!hasBeenPulled(in) && isAvailable(toWrapped)) pull(in)
           }
-
-          if (!isClosed(fromWrapped) && !hasBeenPulled(fromWrapped)) pull(fromWrapped)
-          else downstreamDemand += 1
         } else complete(out)
       }
       override def onDownstreamFinish(): Unit = cancel(fromWrapped)
@@ -128,184 +149,4 @@ abstract class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
 
 }
 
-object CircuitBreakerBidiFlowUnordered {
-
-  /**
-    * Please see comments of [[apply[In, Out, Id](timeout: FiniteDuration, idGenerator: () => Id)]] for more details.
-    *
-    * This API provides a simplified version with a default [[Long]] id generator.  It requires the wrapped flow
-    * to carry a [[Long]] id to be carried around with input and output as a tuple.
-    *
-    * @param timeout Duration after which a message should be considered timed out.
-    */
-  def apply[In, Out](timeout: FiniteDuration): BidiFlow[In, (Long, In), (Long, Out), Try[Out], NotUsed] =
-    apply(timeout, LongIdGenerator().nextId())
-
-  /**
-    * Java API
-    */
-  def create[In, Out](timeout: FiniteDuration):
-  akka.stream.javadsl.BidiFlow[In, (java.lang.Long, In), (java.lang.Long, Out), Try[Out], NotUsed] =
-    apply(timeout, LongIdGenerator().nextIdAsJava()).asJava
-
-  /**
-    * Creates a BidiFlow that can be joined with a flow to add timeout functionality.  This API is specifically for
-    * the flows that do not guarantee message ordering.  For flows that guarantee message ordering, please use
-    * [[CircuitBreakerBidiOrdered]].
-    *
-    * Timeout functionality requires each message to be uniquely identified, so this API requires the wrapped flow to
-    * carry an id of type [[Id]] along with the flow's input and output as a tuple.
-    *
-    * It takes a custom [[Id]] generator.  Please see [[apply[In, Out](timeout: FiniteDuration)]] for the API with
-    * default [[Long]] id generator.
-    *
-    * Once it pulls in an element (from in),
-    *   - generates an [[Id]] to uniquely identify an element.
-    *   - marks the system time along with the generated id.
-    *
-    * @param timeout Duration after which a message should be considered timeout out.
-    * @param idGenerator Function that generates a unique id for each message
-    */
-  def apply[In, Out, Id](timeout: FiniteDuration, idGenerator: () => Id):
-  BidiFlow[In, (Id, In), (Id, Out), Try[Out], NotUsed] =
-    BidiFlow.fromGraph(CircuitBreakerBidiUnordered(timeout, idGenerator))
-
-  /**
-    * Java API
-    */
-  def create[In, Out, Id](timeout: FiniteDuration, idGenerator: Supplier[Id]):
-  akka.stream.javadsl.BidiFlow[In, (Id, In), (Id, Out), Try[Out], NotUsed] =
-    apply(timeout, () => idGenerator.get()).asJava
-
-}
-
-object CircuitBreakerBidiUnordered {
-
-  def apply[In, Out](timeout: FiniteDuration): CircuitBreakerBidiUnordered[In, Out, Long] =
-    new CircuitBreakerBidiUnordered(timeout, LongIdGenerator().nextId())
-
-  def apply[In, Out, Id](timeout: FiniteDuration, idGenerator: () => Id): CircuitBreakerBidiUnordered[In, Out, Id] =
-    new CircuitBreakerBidiUnordered(timeout, idGenerator)
-}
-
-final class CircuitBreakerBidiUnordered[In, Out, Id](timeout: FiniteDuration, idGenerator: () => Id) extends
-  CircuitBreakerBidi[In, (Id, In), (Id, Out), Out](timeout) {
-
-  val timeouts = new mutable.LinkedHashMap[Id, (In, Long)]
-  val readyToPush = mutable.Queue[(Out, Long)]()
-
-  override def mapFromInToWrapped(element: In): (Id, In) = {
-    val id = idGenerator()
-    timeouts.put(id, (element, System.nanoTime()))
-    (id, element)
-  }
-
-  override def onPushFromWrapped(fromWrapped: (Id, Out), isOutAvailable: Boolean): Option[Try[Out]] = {
-    val (id, element) = fromWrapped
-    timeouts.remove(id) map { case(_, startTime) =>
-      readyToPush.enqueue((element, startTime))
-    }
-
-    if(isOutAvailable) pickNextElemToPush()
-    else None
-  }
-
-  override def firstElemStartTime = timeouts.headOption map { case (_, (_, startTime)) => startTime } getOrElse(0)
-
-  private def pickNextElemToPush(): Option[Try[Out]] = {
-    timeouts.headOption.filter { case(_, (_, firstElemStartTime)) =>
-      firstElemStartTime < expirationTime &&
-      readyToPush.headOption.filter { case(_, readyToPushStartTime) =>
-        readyToPushStartTime <= firstElemStartTime
-      }.isEmpty
-    } map { case(id, (_, _)) =>
-      timeouts.remove(id)
-      Failure(FlowTimeoutException())
-    } orElse(Try(readyToPush.dequeue()).toOption.map { case(elem, _) => Success(elem)})
-  }
-
-  override def onPullOut() = pickNextElemToPush()
-
-  override def onScheduledTimeout() = pickNextElemToPush()
-
-  override def isBuffersEmpty() = timeouts.isEmpty && readyToPush.isEmpty
-}
-
-object CircuitBreakerBidiFlowOrdered {
-  /**
-    * Creates a BidiFlow that can be joined with a flow to add timeout functionality.  This API is specifically for
-    * the flows that guarantee message ordering.
-    *
-    * Since the wrapped flow guarantees message ordering, unlike [[CircuitBreakerBidiFlowUnordered]], it does not require an
-    * id to be carried around by the wrapped flow.
-    *
-    * @param timeout Duration after which a message should be considered timeout out.
-    */
-  def apply[In, Out](timeout: FiniteDuration): BidiFlow[In, In, Out, Try[Out], NotUsed] =
-    BidiFlow.fromGraph(CircuitBreakerBidiOrdered(timeout))
-
-  /**
-    * Java API
-    */
-  def create[In, Out](timeout: FiniteDuration): akka.stream.javadsl.BidiFlow[In, In, Out, Try[Out], NotUsed] =
-    apply(timeout).asJava
-}
-
-object CircuitBreakerBidiOrdered {
-  def apply[In, Out](timeout: FiniteDuration): CircuitBreakerBidiOrdered[In, Out] =
-    new CircuitBreakerBidiOrdered(timeout)
-}
-
-final class CircuitBreakerBidiOrdered[In, Out](timeout: FiniteDuration) extends
-  CircuitBreakerBidi[In, In, Out, Out](timeout) {
-
-  val timeouts = mutable.Queue[TimeoutTracker]()
-
-  override def mapFromInToWrapped(elem: In): In = {
-    timeouts.enqueue(TimeoutTracker(System.nanoTime(), false))
-    elem
-  }
-
-  override def onPushFromWrapped(elem: Out, isOutAvailable: Boolean): Option[Try[Out]] = {
-    if(isOutAvailable) {
-      if(timeouts.dequeue().isTimedOut) None
-      else Some(Success(elem))
-    } else None
-  }
-
-  override def firstElemStartTime = timeouts.find(_.isTimedOut == false).map(_.startTime).getOrElse(0)
-
-  override def onPullOut() = None
-
-  override def onScheduledTimeout() = {
-    timeouts.find(_.isTimedOut == false).filter(_.startTime < expirationTime).map { elem =>
-        elem.isTimedOut = true
-        Failure(FlowTimeoutException())
-    }
-  }
-
-  override def isBuffersEmpty() = timeouts.isEmpty || timeouts.forall(_.isTimedOut == true)
-
-  case class TimeoutTracker(startTime: Long, var isTimedOut: Boolean)
-}
-
-object LongIdGenerator {
-  def apply() = new LongIdGenerator()
-}
-
-class LongIdGenerator {
-  // This is not concurrent, nor needs it to be
-  var id = 0L
-
-  def nextId() = { () =>
-    // It may overflow, which should be ok for most scenarios.  If the message with id 0 is still not completed
-    // after it overflowed, then deduplication logic would be broken.  For such scenarios, a different
-    // id generator should be used.
-    id = id + 1
-    id
-  }
-
-  def nextIdAsJava(): () => java.lang.Long = { () => nextId()()}
-}
-
-case class FlowTimeoutException(msg: String = "Flow timed out!") extends TimeoutException(msg)
+case class CircuitBreakerOpenException(msg: String = "Circuit Breaker is open!") extends Exception(msg)
