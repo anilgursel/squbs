@@ -70,10 +70,11 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
   val readyToPush = mutable.Queue[Try[Out]]()
   private[this] def timerName = "CircuitBreakerBidi"
 
-  val cb = CircuitBreaker(3, timeout, 30 milliseconds)
+  val cb = new CircuitBreaker(3, timeout, 10 milliseconds, 10 milliseconds, 1.0)
 
   def onPushFromWrapped(elem: Try[Out], isOutAvailable: Boolean): Option[Try[Out]] = {
     readyToPush.enqueue(elem)
+    print(s" readyToPush.enqueue(${elem.toString})")
     if(isOutAvailable) Some(readyToPush.dequeue())
     else None
   }
@@ -91,13 +92,22 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
     setHandler(in, new InHandler {
       override def onPush(): Unit = {
         val elem = grab(in)
+        print(s"---> onPushIn elem: ${elem.toString}  ")
         if(cb.shortCircuit()) {
+          print(s"short circuit: YES ")
           // TODO Need to have fallback check here before sending an exception.
-          if(isAvailable(out)) push(out, Failure(CircuitBreakerOpenException()))
-          else readyToPush.enqueue(Failure(CircuitBreakerOpenException()))
+          if(isAvailable(out) && readyToPush.isEmpty){
+            println("push(out, Failure(CircuitBreakerOpenException()))")
+            push(out, Failure(CircuitBreakerOpenException()))
+          } else {
+            readyToPush.enqueue(Failure(CircuitBreakerOpenException()))
+            println("readyToPush.enqueue(Failure(CircuitBreakerOpenException()))")
+          }
           // TODO Add to internal buffer.  This alltogether might be an onShortCircuit.  Moving it to internal buffers
           // and return an Option, like in timeout flow.
-        } else push(toWrapped, elem)
+        } else {
+          println(s" short circuit: NO push(toWrapped, ${elem.toString})")
+          push(toWrapped, elem) }
       }
       override def onUpstreamFinish(): Unit = complete(toWrapped)
       override def onUpstreamFailure(ex: Throwable): Unit = fail(toWrapped, ex)
@@ -105,7 +115,11 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
 
     setHandler(toWrapped, new OutHandler {
       override def onPull(): Unit = {
-        if(!hasBeenPulled(in)) pull(in)
+        print("---> onPullToWrapped  ")
+        if(!hasBeenPulled(in)) {
+          println("pull(in)")
+          pull(in)
+        } else println("NOT pull(in)")
       }
       override def onDownstreamFinish(): Unit = completeStage()
     })
@@ -113,14 +127,26 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
     setHandler(fromWrapped, new InHandler {
       override def onPush(): Unit = {
         val elem = grab(fromWrapped)
+        print(s"---> onPushFromWrapped elem: ")
         elem match {
             // TODO add metrics code here
-          case Success(_) => cb.succeed()
-          case Failure(_) => cb.fail().foreach(scheduleOnce(timerName, _))
+          case Success(_) =>
+            cb.succeed()
+            print(s"${elem.toString}  ")
+          case Failure(_) =>
+            print("TimeoutException  ")
+            cb.fail().foreach { d =>
+              if(!isTimerActive(timerName)) {
+                scheduleOnce(timerName, d)
+                print(s"scheduleOnce($d)")
+              }
+            }
         }
         onPushFromWrapped(elem, isAvailable(out)) foreach { elem =>
           push(out, elem)
+          print(s"  push(out, ${elem.toString})")
         }
+        println("")
       }
       override def onUpstreamFinish(): Unit = {
         if(isBuffersEmpty) completeStage()
@@ -132,20 +158,40 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
 
     setHandler(out, new OutHandler {
       override def onPull(): Unit = {
+        print(s"---> onPullOut: ")
         if(!upstreamFinished || !isBuffersEmpty()) {
+          print(" NOT finished  ")
           onPullOut() match {
-            case Some(elem) => push(out, elem)
+            case Some(elem) => {
+              println(s"push(out, ${elem.toString})")
+              push(out, elem)
+            }
             case None =>
-              if(!hasBeenPulled(fromWrapped)) pull(fromWrapped)
-              else if(!hasBeenPulled(in) && isAvailable(toWrapped)) pull(in)
+              if(!hasBeenPulled(fromWrapped)) {
+                println("pull(fromWrapped)")
+                pull(fromWrapped)
+              }
+              else if(!hasBeenPulled(in) && isAvailable(toWrapped)) {
+                println("pull(in)")
+                pull(in)
+              } else println("do nothing")
           }
-        } else complete(out)
+        } else {
+          println("complete(out)")
+          complete(out)
+        }
       }
       override def onDownstreamFinish(): Unit = cancel(fromWrapped)
     })
 
     override def onTimer(timerKey: Any): Unit = {
+      print("---> onTimer: cb.attemptReset()")
       cb.attemptReset()
+      if(!hasBeenPulled(in) && isAvailable(toWrapped)) {
+        print(" pull(in)")
+        pull(in)
+      }
+      println("")
     }
   }
 
