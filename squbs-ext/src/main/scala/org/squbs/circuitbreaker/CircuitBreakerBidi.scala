@@ -175,20 +175,15 @@ class CircuitBreakerBidi[In, Out](circuitBreaker: CircuitBreakerLogic)
     })
 
     override def onTimer(timerKey: Any): Unit = {
-      print("---> onTimer: cb.attemptReset()")
       circuitBreaker.attemptReset()
-      if(!hasBeenPulled(in) && isAvailable(toWrapped)) {
-        print(" pull(in)")
-        pull(in)
-      }
-      println("")
+      if(!hasBeenPulled(in) && isAvailable(toWrapped)) pull(in)
     }
 
-    private def scheduleResetAttempt(d: FiniteDuration): Unit =
-      if(!isTimerActive(timerName)) {
-        scheduleOnce(timerName, d)
-        print(s"scheduleOnce($d)")
-      }
+    // TODO This could actually be moved to CircuitBreaker; however, then we need to make sure we do not schedule
+    // a timer if already one scheduled.  It is a scenario that should not happen though.
+    // The other thing to consider is which thread the scheduled task would run.  Doing this way ensure `onTimer` being
+    // called in the same thread.
+    private def scheduleResetAttempt(d: FiniteDuration): Unit = if(!isTimerActive(timerName)) scheduleOnce(timerName, d)
   }
 
   override def toString = "CircuitBreakerBidi"
