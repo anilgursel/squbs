@@ -16,15 +16,8 @@
 
 package org.squbs.circuitbreaker
 
-import java.util.concurrent.TimeUnit.NANOSECONDS
-import java.util.concurrent.TimeoutException
-import java.util.function.Supplier
-
-import akka.NotUsed
-import akka.actor.ActorSystem
-import akka.stream.{Attributes, BidiShape, Inlet, Outlet}
-import akka.stream.scaladsl.BidiFlow
 import akka.stream.stage._
+import akka.stream._
 
 import scala.collection.mutable
 import scala.concurrent.duration._
@@ -37,28 +30,29 @@ import scala.util.{Failure, Success, Try}
   * <~ | out    fromWrapped | <~
   *    +--------------------+
   *
-  * A timer Bidi stage that is used to wrap a flow to add timeout functionality.  An element can be timed out only if
-  * there is a downstream demand.
+  * A Bidi stage that is used to wrap a flow to add Circuit Breaker functionality.  When the wrapped flow is having
+  * trouble responding in time or it is responding with failures, then based on the provided settings, it short circuits
+  * the stream: Instead of pushing an element to wrapped flow, it directly pushes it down to downstream (out), given
+  * that there is downstream demand.
   *
-  * Once an element is pushed from the wrapped flow (from fromWrapped), it first checks if the element is already
-  * timed out.  If a timeout message has already been sent for that element to downstream, then, the element from
-  * the wrapped flow is dropped.
+  * The wrapped flow pushes down (fromWrapped) a [[Try]].  By default, any [[Failure]] is considered a problem and
+  * causes the circuit breaker failure count to be incremented.  However, [[CircuitBreakerBidi]] also accepts a
+  * [[decider]] to decide on what element is actually considered a failure.  For instance, if Circuit Breaker is used to
+  * wrap Http calls, a [[Success]] Http Response with status code 500 internal server error should be considered a
+  * failure.
   *
-  * Please note, this timeout bidi stage can be used for flows that keep the order of messages as well as for the ones
-  * that do not keep the message order.  Please see the corresponding implementations:
-  * [[CircuitBreakerBidiOrdered]] and [[CircuitBreakerBidiUnordered]] for more details.
+  * By default, the circuit breaker functionality is per materialization meaning that it takes into account failures
+  * and successes only from a single materialization.  But, it also accepts a [[circuitBreaker]] that can be shared
+  * across multiple streams as well as multiple materializations of the same stream.
   *
-  * To wrap the flows that do not guarantee the message ordering, it requires an id to be carried along with the
-  * actual element [[In]] as a tuple to uniquely identify elements.
+  * Please note, if the upstream does not control the throughput, then [[CircuitBreakerBidi]] might cause more elements
+  * to be short circuited than expected.  The downstream demand will be addressed with short circuit messages, which
+  * most likely takes less time than it takes the wrapped flow to process an element.  To eliminate this problem, a
+  * throttle can be applied specifically for circuit breaker related messages.
   *
-  * A timer gets scheduled when there is a downstream demand that's not immediately addressed.  This is to make sure
-  * that a timeout response is sent to the downstream when upstream cannot address the demand on time.
-  *
-  * Timer precision is 10ms to avoid unnecessary timer scheduling cycles
-  *
-  * @param timeout Duration after which a message should be considered timed out.
+  * @param circuitBreaker Circuit Breaker implementation
   */
-class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
+class CircuitBreakerBidi[In, Out](circuitBreaker: CircuitBreakerLogic)
   extends GraphStage[BidiShape[In, In, Try[Out], Try[Out]]] {
   val in = Inlet[In]("CircuitBreakerBidi.in")
   val fromWrapped = Inlet[Try[Out]]("CircuitBreakerBidi.fromWrapped")
@@ -70,20 +64,22 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
   val readyToPush = mutable.Queue[Try[Out]]()
   private[this] def timerName = "CircuitBreakerBidi"
 
-  val cb = new CircuitBreaker(3, timeout, 10 milliseconds, 10 milliseconds, 1.0)
+  def this(maxFailures: Int,
+           callTimeout: FiniteDuration,
+           resetTimeout: FiniteDuration,
+           maxResetTimeout: FiniteDuration,
+           exponentialBackoffFactor: Double) =
+    this(new CircuitBreakerLogic(maxFailures, callTimeout, resetTimeout, maxResetTimeout, exponentialBackoffFactor))
+
+  def this(maxFailures: Int,
+           callTimeout: FiniteDuration,
+           resetTimeout: FiniteDuration) = this(maxFailures, callTimeout, resetTimeout, 36500.days, 1.0)
 
   def onPushFromWrapped(elem: Try[Out], isOutAvailable: Boolean): Option[Try[Out]] = {
     readyToPush.enqueue(elem)
-    print(s" readyToPush.enqueue(${elem.toString})")
     if(isOutAvailable) Some(readyToPush.dequeue())
     else None
   }
-
-  def onPullOut(): Option[Try[Out]] = {
-    Try(readyToPush.dequeue()).toOption
-  }
-
-  def isBuffersEmpty(): Boolean = readyToPush.isEmpty
 
   override def initialAttributes = Attributes.name("CircuitBreakerBidi")
 
@@ -93,9 +89,8 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
       override def onPush(): Unit = {
         val elem = grab(in)
         print(s"---> onPushIn elem: ${elem.toString}  ")
-        if(cb.shortCircuit()) {
+        if(circuitBreaker.shortCircuit()) {
           print(s"short circuit: YES ")
-          // TODO Need to have fallback check here before sending an exception.
           if(isAvailable(out) && readyToPush.isEmpty){
             println("push(out, Failure(CircuitBreakerOpenException()))")
             push(out, Failure(CircuitBreakerOpenException()))
@@ -103,8 +98,6 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
             readyToPush.enqueue(Failure(CircuitBreakerOpenException()))
             println("readyToPush.enqueue(Failure(CircuitBreakerOpenException()))")
           }
-          // TODO Add to internal buffer.  This alltogether might be an onShortCircuit.  Moving it to internal buffers
-          // and return an Option, like in timeout flow.
         } else {
           println(s" short circuit: NO push(toWrapped, ${elem.toString})")
           push(toWrapped, elem) }
@@ -124,6 +117,12 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
       override def onDownstreamFinish(): Unit = completeStage()
     })
 
+    def scheduleAttemptReset(d: FiniteDuration): Unit =
+      if(!isTimerActive(timerName)) {
+        scheduleOnce(timerName, d)
+        print(s"scheduleOnce($d)")
+      }
+
     setHandler(fromWrapped, new InHandler {
       override def onPush(): Unit = {
         val elem = grab(fromWrapped)
@@ -131,16 +130,12 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
         elem match {
             // TODO add metrics code here
           case Success(_) =>
-            cb.succeed()
+            circuitBreaker.succeed()
             print(s"${elem.toString}  ")
           case Failure(_) =>
             print("TimeoutException  ")
-            cb.fail().foreach { d =>
-              if(!isTimerActive(timerName)) {
-                scheduleOnce(timerName, d)
-                print(s"scheduleOnce($d)")
-              }
-            }
+
+            circuitBreaker.fail(scheduleAttemptReset)
         }
         onPushFromWrapped(elem, isAvailable(out)) foreach { elem =>
           push(out, elem)
@@ -149,7 +144,7 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
         println("")
       }
       override def onUpstreamFinish(): Unit = {
-        if(isBuffersEmpty) completeStage()
+        if(readyToPush.isEmpty) completeStage()
         else upstreamFinished = true
       }
 
@@ -159,9 +154,9 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
     setHandler(out, new OutHandler {
       override def onPull(): Unit = {
         print(s"---> onPullOut: ")
-        if(!upstreamFinished || !isBuffersEmpty()) {
+        if(!upstreamFinished || !readyToPush.isEmpty) {
           print(" NOT finished  ")
-          onPullOut() match {
+          readyToPush.dequeueFirst((_: Try[Out]) => true) match {
             case Some(elem) => {
               println(s"push(out, ${elem.toString})")
               push(out, elem)
@@ -186,7 +181,7 @@ class CircuitBreakerBidi[In, Out](timeout: FiniteDuration)
 
     override def onTimer(timerKey: Any): Unit = {
       print("---> onTimer: cb.attemptReset()")
-      cb.attemptReset()
+      circuitBreaker.attemptReset()
       if(!hasBeenPulled(in) && isAvailable(toWrapped)) {
         print(" pull(in)")
         pull(in)

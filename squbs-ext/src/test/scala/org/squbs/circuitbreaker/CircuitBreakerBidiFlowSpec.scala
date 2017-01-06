@@ -33,6 +33,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
 
   implicit val materializer = ActorMaterializer()
 
+
   val timeout = 60 milliseconds
   val timeoutFailure = Failure(FlowTimeoutException("Flow timed out!"))
   val circuitBreakerOpenFailure = Failure(CircuitBreakerOpenException("Circuit Breaker is open!"))
@@ -46,7 +47,8 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     }
 
     val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String](timeout)
-    val circuitBreakerBidiFlow = BidiFlow.fromGraph(new CircuitBreakerBidi[String, String](timeout))
+    val circuitBreaker = new CircuitBreakerLogic(3, timeout, 10 milliseconds)
+    val circuitBreakerBidiFlow = BidiFlow.fromGraph(new CircuitBreakerBidi[String, String](circuitBreaker))
 
     val result = Source(List("a", "b", "b", "b", "b", "b", "b", "b", "b", "b", "b", "b", "b", "b", "a", "c", "a", "a",
       "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
