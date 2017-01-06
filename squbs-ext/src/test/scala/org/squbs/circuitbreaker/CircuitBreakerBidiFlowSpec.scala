@@ -22,6 +22,7 @@ import akka.stream.scaladsl.{BidiFlow, Flow, Sink, Source}
 import akka.testkit.TestKit
 import akka.util.Timeout
 import org.scalatest.{AsyncFlatSpecLike, Matchers}
+import org.squbs.circuitbreaker.impl.AtomicCircuitBreakerLogic
 import org.squbs.streams.{FlowTimeoutException, TimeoutBidiFlowUnordered}
 
 import scala.concurrent.duration._
@@ -47,7 +48,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     }
 
     val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String](timeout)
-    val circuitBreaker = new CircuitBreakerLogic(3, timeout, 10 milliseconds)
+    val circuitBreaker = new AtomicCircuitBreakerLogic(3, timeout, 10 milliseconds)
     val circuitBreakerBidiFlow = BidiFlow.fromGraph(new CircuitBreakerBidi[String, String](circuitBreaker))
 
     val result = Source(List("a", "b", "b", "b", "b", "b", "b", "b", "b", "b", "b", "b", "b", "b", "a", "c", "a", "a",

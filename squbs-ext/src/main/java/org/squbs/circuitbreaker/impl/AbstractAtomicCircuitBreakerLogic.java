@@ -14,18 +14,18 @@
  * limitations under the License.
  */
 
-package org.squbs.circuitbreaker;
+package org.squbs.circuitbreaker.impl;
 
 import akka.util.Unsafe;
 
-class AbstractCircuitBreaker {
+class AbstractAtomicCircuitBreakerLogic {
     protected final static long stateOffset;
     protected final static long resetTimeoutOffset;
 
     static {
         try {
-            stateOffset = Unsafe.instance.objectFieldOffset(CircuitBreakerLogic.class.getDeclaredField("_currentStateDoNotCallMeDirectly"));
-            resetTimeoutOffset = Unsafe.instance.objectFieldOffset(CircuitBreakerLogic.class.getDeclaredField("_currentResetTimeoutDoNotCallMeDirectly"));
+            stateOffset = Unsafe.instance.objectFieldOffset(AtomicCircuitBreakerLogic.class.getDeclaredField("_currentStateDoNotCallMeDirectly"));
+            resetTimeoutOffset = Unsafe.instance.objectFieldOffset(AtomicCircuitBreakerLogic.class.getDeclaredField("_currentResetTimeoutDoNotCallMeDirectly"));
         } catch(Throwable t){
             throw new ExceptionInInitializerError(t);
         }

@@ -18,6 +18,7 @@ package org.squbs.circuitbreaker
 
 import akka.stream.stage._
 import akka.stream._
+import org.squbs.circuitbreaker.impl.AtomicCircuitBreakerLogic
 
 import scala.collection.mutable
 import scala.concurrent.duration._
@@ -69,8 +70,8 @@ class CircuitBreakerBidi[In, Out](circuitBreaker: CircuitBreakerLogic)
            resetTimeout: FiniteDuration,
            maxResetTimeout: FiniteDuration,
            exponentialBackoffFactor: Double) =
-    this(new CircuitBreakerLogic(maxFailures, callTimeout, resetTimeout, maxResetTimeout, exponentialBackoffFactor))
-
+    this(new AtomicCircuitBreakerLogic(maxFailures, callTimeout, resetTimeout, maxResetTimeout, exponentialBackoffFactor))
+// TODO This should not access to Atomic
   def this(maxFailures: Int,
            callTimeout: FiniteDuration,
            resetTimeout: FiniteDuration) = this(maxFailures, callTimeout, resetTimeout, 36500.days, 1.0)
@@ -117,12 +118,6 @@ class CircuitBreakerBidi[In, Out](circuitBreaker: CircuitBreakerLogic)
       override def onDownstreamFinish(): Unit = completeStage()
     })
 
-    def scheduleAttemptReset(d: FiniteDuration): Unit =
-      if(!isTimerActive(timerName)) {
-        scheduleOnce(timerName, d)
-        print(s"scheduleOnce($d)")
-      }
-
     setHandler(fromWrapped, new InHandler {
       override def onPush(): Unit = {
         val elem = grab(fromWrapped)
@@ -135,7 +130,7 @@ class CircuitBreakerBidi[In, Out](circuitBreaker: CircuitBreakerLogic)
           case Failure(_) =>
             print("TimeoutException  ")
 
-            circuitBreaker.fail(scheduleAttemptReset)
+            circuitBreaker.fail(scheduleResetAttempt)
         }
         onPushFromWrapped(elem, isAvailable(out)) foreach { elem =>
           push(out, elem)
@@ -188,6 +183,12 @@ class CircuitBreakerBidi[In, Out](circuitBreaker: CircuitBreakerLogic)
       }
       println("")
     }
+
+    private def scheduleResetAttempt(d: FiniteDuration): Unit =
+      if(!isTimerActive(timerName)) {
+        scheduleOnce(timerName, d)
+        print(s"scheduleOnce($d)")
+      }
   }
 
   override def toString = "CircuitBreakerBidi"

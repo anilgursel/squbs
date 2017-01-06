@@ -3,24 +3,11 @@ package org.squbs.circuitbreaker
 
 // TODO Update the license header of this file!
 // Since it is mostly copied from Akka Contrib, removing the PayPal legal header.
-import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicLong}
+import akka.actor.ActorRef
+import akka.event.EventBus
+import org.squbs.circuitbreaker.impl.AtomicCircuitBreakerLogic
 
-import akka.actor.{ActorSystem, Scheduler}
-import akka.util.Unsafe
-
-import scala.util.control.NoStackTrace
-import java.util.concurrent.{Callable, CompletionStage, CopyOnWriteArrayList}
-
-import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 import scala.concurrent.duration._
-import scala.concurrent.TimeoutException
-import scala.util.control.NonFatal
-import scala.util.Success
-import akka.dispatch.ExecutionContexts.sameThreadExecutionContext
-import akka.pattern.CircuitBreakerOpenException
-import akka.stream.Materializer
-
-import scala.compat.java8.FutureConverters
 
 /**
   * Companion object providing factory methods for Circuit Breaker which runs callbacks in caller's thread
@@ -40,7 +27,7 @@ object CircuitBreakerLogic {
     * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
     */
   def apply(maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration): CircuitBreakerLogic =
-    new CircuitBreakerLogic(maxFailures, callTimeout, resetTimeout)
+    new AtomicCircuitBreakerLogic(maxFailures, callTimeout, resetTimeout)
   /**
     * Java API: Create a new CircuitBreaker.
     *
@@ -76,16 +63,20 @@ object CircuitBreakerLogic {
   * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
   * @param executor [[scala.concurrent.ExecutionContext]] used for execution of state transition listeners
   */
-class CircuitBreakerLogic(maxFailures:              Int,
-                          val callTimeout:          FiniteDuration,
-                          resetTimeout:             FiniteDuration,
-                          maxResetTimeout:          FiniteDuration,
-                          exponentialBackoffFactor: Double) extends AbstractCircuitBreaker {
+trait CircuitBreakerLogic {
 
-  require(exponentialBackoffFactor >= 1.0, "factor must be >= 1.0")
+  // TODO Consider making this overridable
+  private val eventBus = new CircuitBreakerEventBusImpl
 
-  def this(maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration) = {
-    this(maxFailures, callTimeout, resetTimeout, 36500.days, 1.0)
+  /**
+    * TODO Add Javadoc
+    *
+    * @param subscriber
+    * @param to
+    * @return
+    */
+  def subscribe(subscriber: ActorRef, to: CircuitBreakerEventType): Boolean = {
+    eventBus.subscribe(subscriber, to)
   }
 
   /**
@@ -94,189 +85,32 @@ class CircuitBreakerLogic(maxFailures:              Int,
     *
     * @param maxResetTimeout the upper bound of resetTimeout
     */
-  def withExponentialBackoff(maxResetTimeout: FiniteDuration): CircuitBreakerLogic = {
-    new CircuitBreakerLogic(maxFailures, callTimeout, resetTimeout, maxResetTimeout, 2.0)
-  }
-
-  /**
-    * Holds reference to current state of CircuitBreaker - *access only via helper methods*
-    */
-  @volatile
-  private[this] var _currentStateDoNotCallMeDirectly: State = Closed
-
-  /**
-    * Holds reference to current resetTimeout of CircuitBreaker - *access only via helper methods*
-    */
-  @volatile
-  private[this] var _currentResetTimeoutDoNotCallMeDirectly: FiniteDuration = resetTimeout
-
-  /**
-    * Helper method for access to underlying state via Unsafe
-    *
-    * @param oldState Previous state on transition
-    * @param newState Next state on transition
-    * @return Whether the previous state matched correctly
-    */
-  @inline
-  private[this] def swapState(oldState: State, newState: State): Boolean =
-  Unsafe.instance.compareAndSwapObject(this, AbstractCircuitBreaker.stateOffset, oldState, newState)
-
-  /**
-    * Helper method for accessing underlying state via Unsafe
-    *
-    * @return Reference to current state
-    */
-  @inline
-  private[this] def currentState: State =
-  Unsafe.instance.getObjectVolatile(this, AbstractCircuitBreaker.stateOffset).asInstanceOf[State]
-
-  /**
-    * Helper method for updating the underlying resetTimeout via Unsafe
-    */
-  @inline
-  private[this] def swapResetTimeout(oldResetTimeout: FiniteDuration, newResetTimeout: FiniteDuration): Boolean =
-  Unsafe.instance.compareAndSwapObject(this, AbstractCircuitBreaker.resetTimeoutOffset, oldResetTimeout, newResetTimeout)
-
-  /**
-    * Helper method for accessing to the underlying resetTimeout via Unsafe
-    */
-  @inline
-  private[this] def currentResetTimeout: FiniteDuration =
-  Unsafe.instance.getObjectVolatile(this, AbstractCircuitBreaker.resetTimeoutOffset).asInstanceOf[FiniteDuration]
+  def withExponentialBackoff(maxResetTimeout: FiniteDuration): CircuitBreakerLogic
 
   /**
     * Mark a successful call through CircuitBreaker. Sometimes the callee of CircuitBreaker sends back a message to the
     * caller Actor. In such a case, it is convenient to mark a successful call instead of using Future
     * via [[withCircuitBreaker]]
     */
-  def succeed(): Unit = {
-    currentState.callSucceeds()
-  }
+  def succeed(): Unit
 
   /**
     * Mark a failed call through CircuitBreaker. Sometimes the callee of CircuitBreaker sends back a message to the
     * caller Actor. In such a case, it is convenient to mark a failed call instead of using Future
     * via [[withCircuitBreaker]]
     */
-  def fail(f: (FiniteDuration => Unit)): Unit = {
+  def fail(f: (FiniteDuration => Unit)): Unit
 
-    // TODO Should we do a check "if !isTimerActive" ?
-    currentState.callFails(f)
-  }
-
-  def shortCircuit(): Boolean = {
-    currentState.shortCircuit()
-  }
-
-  /**
-    * Return true if the internal state is Closed. WARNING: It is a "power API" call which you should use with care.
-    * Ordinal use cases of CircuitBreaker expects a remote call to return Future, as in withCircuitBreaker.
-    * So, if you check the state by yourself, and make a remote call outside CircuitBreaker, you should
-    * manage the state yourself.
-    */
-  def isClosed: Boolean = {
-    currentState == Closed
-  }
-
-  /**
-    * Return true if the internal state is Open. WARNING: It is a "power API" call which you should use with care.
-    * Ordinal use cases of CircuitBreaker expects a remote call to return Future, as in withCircuitBreaker.
-    * So, if you check the state by yourself, and make a remote call outside CircuitBreaker, you should
-    * manage the state yourself.
-    */
-  def isOpen: Boolean = {
-    currentState == Open
-  }
-
-  /**
-    * Return true if the internal state is HalfOpen. WARNING: It is a "power API" call which you should use with care.
-    * Ordinal use cases of CircuitBreaker expects a remote call to return Future, as in withCircuitBreaker.
-    * So, if you check the state by yourself, and make a remote call outside CircuitBreaker, you should
-    * manage the state yourself.
-    */
-  def isHalfOpen: Boolean = {
-    currentState == HalfOpen
-  }
-
-  /**
-    * Adds a callback to execute when circuit breaker opens
-    *
-    * The callback is run in the [[scala.concurrent.ExecutionContext]] supplied in the constructor.
-    *
-    * @param callback Handler to be invoked on state change
-    * @return CircuitBreaker for fluent usage
-    */
-  def onOpen(callback: ⇒ Unit): CircuitBreakerLogic = onOpen(new Runnable { def run = callback })
-
-  /**
-    * Java API for onOpen
-    *
-    * @param callback Handler to be invoked on state change
-    * @return CircuitBreaker for fluent usage
-    */
-  def onOpen(callback: Runnable): CircuitBreakerLogic = {
-    Open addListener callback
-    this
-  }
-
-  /**
-    * Adds a callback to execute when circuit breaker transitions to half-open
-    * The callback is run in the [[scala.concurrent.ExecutionContext]] supplied in the constructor.
-    *
-    * @param callback Handler to be invoked on state change
-    * @return CircuitBreaker for fluent usage
-    */
-  def onHalfOpen(callback: ⇒ Unit): CircuitBreakerLogic = onHalfOpen(new Runnable { def run = callback })
-
-  /**
-    * JavaAPI for onHalfOpen
-    *
-    * @param callback Handler to be invoked on state change
-    * @return CircuitBreaker for fluent usage
-    */
-  def onHalfOpen(callback: Runnable): CircuitBreakerLogic = {
-    HalfOpen addListener callback
-    this
-  }
-
-  /**
-    * Adds a callback to execute when circuit breaker state closes
-    *
-    * The callback is run in the [[scala.concurrent.ExecutionContext]] supplied in the constructor.
-    *
-    * @param callback Handler to be invoked on state change
-    * @return CircuitBreaker for fluent usage
-    */
-  def onClose(callback: ⇒ Unit): CircuitBreakerLogic = onClose(new Runnable { def run = callback })
-
-  /**
-    * JavaAPI for onClose
-    *
-    * @param callback Handler to be invoked on state change
-    * @return CircuitBreaker for fluent usage
-    */
-  def onClose(callback: Runnable): CircuitBreakerLogic = {
-    Closed addListener callback
-    this
-  }
-
-  /**
-    * Retrieves current failure count.
-    *
-    * @return count
-    */
-  private def currentFailureCount: Int = Closed.get
+  def shortCircuit(): Boolean
 
   /**
     * Implements consistent transition between states. Throws IllegalStateException if an invalid transition is attempted.
     *
     * @param fromState State being transitioning from
-    * @param toState State being transitioning from
+    * @param toState   State being transitioning from
     */
-  private def transition(fromState: State, toState: State): Unit = {
-    if (swapState(fromState, toState))
-      toState.enter()
-    // else some other thread already swapped state
+  protected def transition(fromState: CircuitBreakerState, toState: CircuitBreakerState): Unit = {
+    eventBus.publish(CircuitBreakerEvent(toState, toState))
   }
 
   /**
@@ -284,242 +118,62 @@ class CircuitBreakerLogic(maxFailures:              Int,
     *
     * @param fromState State we're coming from (Closed or Half-Open)
     */
-  private def tripBreaker(fromState: State): Unit = transition(fromState, Open)
+  protected def tripBreaker(fromState: CircuitBreakerState): Unit = transition(fromState, Open)
 
   /**
     * Resets breaker to a closed state.  This is valid from an Half-Open state only.
     *
     */
-  private def resetBreaker(): Unit = transition(HalfOpen, Closed)
+  protected def resetBreaker(): Unit = transition(HalfOpen, Closed)
 
   /**
     * Attempts to reset breaker by transitioning to a half-open state.  This is valid from an Open state only.
-    *
+    * // TODO Consider making this protected as well
     */
   def attemptReset(): Unit = transition(Open, HalfOpen)
 
-  private val timeoutFuture = Future.failed(new TimeoutException("Circuit Breaker Timed out.") with NoStackTrace)
+}
 
-  /**
-    * Internal state abstraction
-    */
-  private sealed trait State {
-    private val listeners = new CopyOnWriteArrayList[Runnable]
 
-    /**
-      * Add a listener function which is invoked on state entry
-      *
-      * @param listener listener implementation
-      */
-    def addListener(listener: Runnable): Unit = listeners add listener
+import akka.util.Subclassification
 
-    /**
-      * Test for whether listeners exist
-      *
-      * @return whether listeners exist
-      */
-    private def hasListeners: Boolean = !listeners.isEmpty
+sealed trait CircuitBreakerEventType
+sealed trait TransitionEvent extends CircuitBreakerEventType
+sealed trait CircuitBreakerState extends TransitionEvent
+object Closed extends CircuitBreakerState
+object HalfOpen extends CircuitBreakerState
+object Open extends CircuitBreakerState
 
-    /**
-      * Notifies the listeners of the transition event via a Future executed in implicit parameter ExecutionContext
-      *
-      * @return Promise which executes listener in supplied [[scala.concurrent.ExecutionContext]]
-      */
-    protected def notifyTransitionListeners() {
-      if (hasListeners) {
-        val iterator = listeners.iterator
-        while (iterator.hasNext) {
-          val listener = iterator.next
-          //          executor.execute(listener)
-        }
-      }
+case class CircuitBreakerEvent(eventType: CircuitBreakerEventType, payload: Any)
+
+class CircuitBreakerEventClassification extends Subclassification[CircuitBreakerEventType] {
+  override def isEqual(x: CircuitBreakerEventType, y: CircuitBreakerEventType): Boolean =
+    x == y
+
+  override def isSubclass(x: CircuitBreakerEventType, y: CircuitBreakerEventType): Boolean =
+    x match {
+      case `y` => true
+      case _ => false
     }
+}
 
-    def shortCircuit(): Boolean
+import akka.event.SubchannelClassification
 
-    /**
-      * Invoked when call succeeds
-      *
-      */
-    def callSucceeds(): Unit
+/**
+  * Publishes the payload of the CircuitBreakerEvent when the event type of the
+  * CircuitBreakerEvent matches with the one used during subscription
+  */
+class CircuitBreakerEventBusImpl extends EventBus with SubchannelClassification {
+  type Event = CircuitBreakerEvent
+  type Classifier = CircuitBreakerEventType
+  type Subscriber = ActorRef
 
-    /**
-      * Invoked when call fails
-      *
-      */
-    def callFails(f: (FiniteDuration => Unit)): Unit
+  override protected val subclassification: Subclassification[Classifier] =
+  new CircuitBreakerEventClassification
 
-    /**
-      * Invoked on the transitioned-to state during transition.  Notifies listeners after invoking subclass template
-      * method _enter
-      *
-      */
-    final def enter(): Unit = {
-      _enter()
-      notifyTransitionListeners()
-    }
+  override protected def classify(event: Event): Classifier = event.eventType
 
-    /**
-      * Template method for concrete traits
-      *
-      */
-    def _enter(): Unit
+  override protected def publish(event: Event, subscriber: Subscriber): Unit = {
+    subscriber ! event.payload
   }
-
-  /**
-    * Concrete implementation of Closed state
-    */
-  private object Closed extends AtomicInteger with State {
-
-    /**
-      * Implementation of shortCircuit, which simply returns false
-      *
-      * @return false
-      */
-    override def shortCircuit: Boolean = false
-
-    /**
-      * On successful call, the failure count is reset to 0
-      *
-      * @return
-      */
-    override def callSucceeds(): Unit = set(0)
-
-    /**
-      * On failed call, the failure count is incremented.  The count is checked against the configured maxFailures, and
-      * the breaker is tripped if we have reached maxFailures.
-      *
-      * @return
-      */
-    override def callFails(f: (FiniteDuration => Unit)): Unit =
-      if (incrementAndGet() == maxFailures) {
-        tripBreaker(Closed)
-        f(currentResetTimeout)
-      }
-
-    /**
-      * On entry of this state, failure count and resetTimeout is reset.
-      *
-      * @return
-      */
-    override def _enter(): Unit = {
-      set(0)
-      swapResetTimeout(currentResetTimeout, resetTimeout)
-    }
-
-    /**
-      * Override for more descriptive toString
-      *
-      * @return
-      */
-    override def toString: String = "Closed with failure count = " + get()
-  }
-
-  /**
-    * Concrete implementation of half-open state
-    */
-  private object HalfOpen extends AtomicBoolean(true) with State {
-
-    /**
-      * Allows a single call through, during which all other callers fail-fast.  If the call fails, the breaker reopens.
-      * If the call succeeds the breaker closes.
-      *
-      * @return true if already returned false once.
-      */
-    override def shortCircuit(): Boolean = !compareAndSet(true, false)
-
-    /**
-      * Reset breaker on successful call.
-      *
-      * @return
-      */
-    override def callSucceeds(): Unit = resetBreaker()
-
-    /**
-      * Reopen breaker on failed call.
-      *
-      * @return
-      */
-    override def callFails(f: (FiniteDuration => Unit)): Unit = {
-      tripBreaker(HalfOpen)
-      val nextResetTimeout = currentResetTimeout * exponentialBackoffFactor match {
-        case f: FiniteDuration ⇒ f
-        case _                 ⇒ currentResetTimeout
-      }
-
-      if (nextResetTimeout < maxResetTimeout)
-        swapResetTimeout(currentResetTimeout, nextResetTimeout)
-
-      f(currentResetTimeout)
-    }
-
-    /**
-      * On entry, guard should be reset for that first call to get in
-      *
-      * @return
-      */
-    override def _enter(): Unit = set(true)
-
-    /**
-      * Override for more descriptive toString
-      *
-      * @return
-      */
-    override def toString: String = "Half-Open currently testing call for success = " + get()
-  }
-
-  /**
-    * Concrete implementation of Open state
-    */
-  private object Open extends AtomicLong with State {
-
-    /**
-      * Fail-fast on any invocation
-      *
-      * @return true
-      */
-    override def shortCircuit(): Boolean = true
-
-    /**
-      * Calculate remaining duration until reset to inform the caller in case a backoff algorithm is useful
-      *
-      * @return duration to when the breaker will attempt a reset by transitioning to half-open
-      */
-    private def remainingDuration(): FiniteDuration = {
-      val fromOpened = System.nanoTime() - get
-      val diff = currentResetTimeout.toNanos - fromOpened
-      if (diff <= 0L) Duration.Zero
-      else diff.nanos
-    }
-
-    /**
-      * No-op for open, calls are never executed so cannot succeed or fail
-      *
-      * @return
-      */
-    override def callSucceeds(): Unit = ()
-
-    /**
-      * No-op for open, calls are never executed so cannot succeed or fail
-      *
-      * @return
-      */
-    override def callFails(f: (FiniteDuration => Unit)): Unit = ()
-
-    /**
-      * On entering this state, schedule an attempted reset via [[akka.actor.Scheduler]] and store the entry time to
-      * calculate remaining time before attempted reset.
-      *
-      * @return
-      */
-    override def _enter(): Unit = set(System.nanoTime())
-
-    /**
-      * Override for more descriptive toString
-      *
-      * @return
-      */
-    override def toString: String = "Open"
-  }
-
 }
