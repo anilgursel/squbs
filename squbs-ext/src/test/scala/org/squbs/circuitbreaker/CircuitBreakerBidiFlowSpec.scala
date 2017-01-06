@@ -17,20 +17,20 @@
 package org.squbs.circuitbreaker
 
 import akka.actor.{Actor, ActorSystem, Props}
-import akka.stream.{ActorMaterializer, ThrottleMode}
+import akka.stream.{ActorMaterializer, OverflowStrategy}
 import akka.stream.scaladsl.{BidiFlow, Flow, Sink, Source}
 import akka.testkit.{ImplicitSender, TestKit}
 import akka.util.Timeout
-import org.scalatest.{AsyncFlatSpecLike, Matchers}
+import org.scalatest.{FlatSpecLike, Matchers}
 import org.squbs.circuitbreaker.impl.AtomicCircuitBreakerLogic
 import org.squbs.streams.{FlowTimeoutException, TimeoutBidiFlowUnordered}
 
 import scala.concurrent.duration._
 import scala.language.postfixOps
-import scala.util.{Failure, Success}
+import scala.util.Failure
 
 class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidiFlowSpec"))
-  with AsyncFlatSpecLike with Matchers with ImplicitSender {
+  with FlatSpecLike with Matchers with ImplicitSender {
 
   implicit val materializer = ActorMaterializer()
 
@@ -39,7 +39,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   val timeoutFailure = Failure(FlowTimeoutException("Flow timed out!"))
   val circuitBreakerOpenFailure = Failure(CircuitBreakerOpenException("Circuit Breaker is open!"))
 
-  it should "work for flows that do not keep the order of messages" in {
+  def flow(circuitBreakerLogic: CircuitBreakerLogic) = {
     val delayActor = system.actorOf(Props[DelayActor])
     import akka.pattern.ask
     implicit val askTimeout = Timeout(5.seconds)
@@ -48,22 +48,38 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     }
 
     val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String](timeout)
-    val circuitBreaker = new AtomicCircuitBreakerLogic(3, timeout, 10 milliseconds)
-    circuitBreaker.subscribe(self, Open)
-    val circuitBreakerBidiFlow = BidiFlow.fromGraph(new CircuitBreakerBidi[String, String](circuitBreaker))
 
-    val result = Source(List("a", "b", "b", "b", "b"))
-        .throttle(10, 10 milliseconds, 20, ThrottleMode.shaping)
-        .via(circuitBreakerBidiFlow.atop(timeoutBidiFlow).join(flow))
-//      .runWith(Sink.seq)
-        .runForeach(println(_))
-    expectMsg(Open)
-    // "c" does NOT fail because the original flow lets it go earlier than "b"
-    val expected = Success("a") :: timeoutFailure :: Success("c") :: Nil
-//    result map { _ should contain theSameElementsAs expected }
-    result map { _ => expected should contain(Success("b")) }
+
+    val circuitBreakerBidiFlow = BidiFlow.fromGraph(new CircuitBreakerBidi[String, String](circuitBreakerLogic))
+
+    Flow[String]
+      .via(circuitBreakerBidiFlow.atop(timeoutBidiFlow).join(flow))
+      .to(Sink.ignore)
+      .runWith(Source.actorRef[String](5, OverflowStrategy.fail))
   }
 
+  it should "increment failure count on call timeout" in {
+    val circuitBreakerLogic = new AtomicCircuitBreakerLogic(2, timeout, 10 milliseconds)
+    circuitBreakerLogic.subscribe(self, Open)
+    val ref = flow(circuitBreakerLogic)
+    ref ! "a"
+    ref ! "b"
+    ref ! "b"
+    expectMsg(Open)
+  }
+
+  it should "reset failure count after success" in {
+    val circuitBreakerLogic = new AtomicCircuitBreakerLogic(2, timeout, 10 milliseconds)
+    circuitBreakerLogic.subscribe(self, TransitionEvents)
+    val ref = flow(circuitBreakerLogic)
+    ref ! "a"
+    ref ! "b"
+    ref ! "b"
+    expectMsg(Open)
+    expectMsg(HalfOpen)
+    ref ! "a"
+    expectMsg(Closed)
+  }
 }
 
 class DelayActor extends Actor {
