@@ -109,28 +109,31 @@ trait CircuitBreakerLogic {
     * @param fromState State being transitioning from
     * @param toState   State being transitioning from
     */
-  protected def transition(fromState: CircuitBreakerState, toState: CircuitBreakerState): Unit = {
-    eventBus.publish(CircuitBreakerEvent(toState, toState))
+  protected final def transition(fromState: CircuitBreakerState, toState: CircuitBreakerState): Unit = {
+    if(transitionImpl(fromState, toState))
+      eventBus.publish(CircuitBreakerEvent(toState, toState))
   }
+
+  protected def transitionImpl(fromState: CircuitBreakerState, toState: CircuitBreakerState): Boolean
 
   /**
     * Trips breaker to an open state.  This is valid from Closed or Half-Open states.
     *
     * @param fromState State we're coming from (Closed or Half-Open)
     */
-  protected def tripBreaker(fromState: CircuitBreakerState): Unit = transition(fromState, Open)
+  protected final def tripBreaker(fromState: CircuitBreakerState): Unit = transition(fromState, Open)
 
   /**
     * Resets breaker to a closed state.  This is valid from an Half-Open state only.
     *
     */
-  protected def resetBreaker(): Unit = transition(HalfOpen, Closed)
+  protected final def resetBreaker(): Unit = transition(HalfOpen, Closed)
 
   /**
     * Attempts to reset breaker by transitioning to a half-open state.  This is valid from an Open state only.
     * // TODO Consider making this protected as well
     */
-  def attemptReset(): Unit = transition(Open, HalfOpen)
+  final def attemptReset(): Unit = transition(Open, HalfOpen)
 
 }
 

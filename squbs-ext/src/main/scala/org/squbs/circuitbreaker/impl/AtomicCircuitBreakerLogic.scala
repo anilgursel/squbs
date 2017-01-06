@@ -153,14 +153,13 @@ class AtomicCircuitBreakerLogic(maxFailures:              Int,
   // TODO This should actually be done as _transition
   // The reason is that, we do not want to mistake of implementations forgetting the eventbus call by missing the super
   // call
-  override def transition(fromState: CircuitBreakerState, toState: CircuitBreakerState): Unit = {
+  override def transitionImpl(fromState: CircuitBreakerState, toState: CircuitBreakerState): Boolean = {
     val internalFromState = mapToInternalState(fromState)
     val internalToState = mapToInternalState(toState)
-    if (swapState(internalFromState, internalToState)) {
-      internalToState.enter()
-      super.transition(fromState, toState)
-    }
+    val isTransitioned = swapState(internalFromState, internalToState)
+    if (isTransitioned) internalToState.enter()
     // else some other thread already swapped state
+    isTransitioned
   }
 
   /**
