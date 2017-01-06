@@ -142,6 +142,7 @@ import akka.util.Subclassification
 
 sealed trait CircuitBreakerEventType
 sealed trait TransitionEvent extends CircuitBreakerEventType
+object TransitionEvents extends TransitionEvent
 sealed trait CircuitBreakerState extends TransitionEvent
 object Closed extends CircuitBreakerState
 object HalfOpen extends CircuitBreakerState
@@ -156,6 +157,7 @@ class CircuitBreakerEventClassification extends Subclassification[CircuitBreaker
   override def isSubclass(x: CircuitBreakerEventType, y: CircuitBreakerEventType): Boolean =
     x match {
       case `y` => true
+      case _ if x.isInstanceOf[TransitionEvent] && y == TransitionEvents => true
       case _ => false
     }
 }

@@ -19,7 +19,7 @@ package org.squbs.circuitbreaker
 import akka.actor.{Actor, ActorSystem, Props}
 import akka.stream.{ActorMaterializer, ThrottleMode}
 import akka.stream.scaladsl.{BidiFlow, Flow, Sink, Source}
-import akka.testkit.TestKit
+import akka.testkit.{ImplicitSender, TestKit}
 import akka.util.Timeout
 import org.scalatest.{AsyncFlatSpecLike, Matchers}
 import org.squbs.circuitbreaker.impl.AtomicCircuitBreakerLogic
@@ -30,7 +30,7 @@ import scala.language.postfixOps
 import scala.util.{Failure, Success}
 
 class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidiFlowSpec"))
-  with AsyncFlatSpecLike with Matchers {
+  with AsyncFlatSpecLike with Matchers with ImplicitSender {
 
   implicit val materializer = ActorMaterializer()
 
@@ -49,37 +49,15 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
 
     val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String](timeout)
     val circuitBreaker = new AtomicCircuitBreakerLogic(3, timeout, 10 milliseconds)
+    circuitBreaker.subscribe(self, Open)
     val circuitBreakerBidiFlow = BidiFlow.fromGraph(new CircuitBreakerBidi[String, String](circuitBreaker))
 
-    val result = Source(List("a", "b", "b", "b", "b", "b", "b", "b", "b", "b", "b", "b", "b", "b", "a", "c", "a", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a",
-      "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a", "a", "c", "a"))
+    val result = Source(List("a", "b", "b", "b", "b"))
         .throttle(10, 10 milliseconds, 20, ThrottleMode.shaping)
         .via(circuitBreakerBidiFlow.atop(timeoutBidiFlow).join(flow))
 //      .runWith(Sink.seq)
         .runForeach(println(_))
+    expectMsg(Open)
     // "c" does NOT fail because the original flow lets it go earlier than "b"
     val expected = Success("a") :: timeoutFailure :: Success("c") :: Nil
 //    result map { _ should contain theSameElementsAs expected }
