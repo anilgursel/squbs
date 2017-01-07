@@ -74,17 +74,27 @@ public class TimeoutBidiFlowTest {
     @Test
     public void testFlowsWithoutMessageOrderGuarantee() throws ExecutionException, InterruptedException {
         final ActorRef delayActor = system.actorOf(Props.create(DelayActor.class));
-        final Flow<Tuple2<Long, String>, Tuple2<Long, String>, NotUsed> flow =
-                Flow.<Tuple2<Long, String>>create()
+        final Flow<Tuple2<String, Long>, Tuple2<String, Long>, NotUsed> flow =
+                Flow.<Tuple2<String, Long>>create()
                         .mapAsyncUnordered(3, elem -> ask(delayActor, elem, 5000))
-                        .map(elem -> (Tuple2<Long, String>)elem);
+                        .map(elem -> (Tuple2<String, Long>)elem);
 
-        final BidiFlow<String, Tuple2<Long, String>, Tuple2<Long, String>, Try<String>, NotUsed> timeoutBidiFlow =
+        final BidiFlow<Tuple2<String, Long>, Tuple2<String, Long>, Tuple2<String, Long>, Tuple2<Try<String>, Long>, NotUsed> timeoutBidiFlow =
                 TimeoutBidiFlowUnordered.create(timeout);
 
+        class Id {
+            long id = 0;
+            long next() {
+                return id++;
+            }
+        }
+
+        Id id = new Id();
         final CompletionStage<List<Try<String>>> result =
                 Source.from(Arrays.asList("a", "b", "c"))
+                        .map(s -> new Tuple2<>(s, id.next()))
                         .via(timeoutBidiFlow.join(flow))
+                        .map(t -> t._1())
                         .runWith(Sink.seq(), mat);
         final List<Try<String>> expected = Arrays.asList(Success.apply("a"), Success.apply("c"), timeoutFailure);
         Assert.assertTrue(result.toCompletableFuture().get().containsAll(expected));
@@ -92,18 +102,30 @@ public class TimeoutBidiFlowTest {
 
     @Test
     public void testWithCustomIdGenerator() throws ExecutionException, InterruptedException {
-        final ActorRef delayActor = system.actorOf(Props.create(DelayActor.class));
-        final Flow<Tuple2<UUID, String>, Tuple2<UUID, String>, NotUsed> flow =
-                Flow.<Tuple2<UUID, String>>create()
-                        .mapAsyncUnordered(3, elem -> ask(delayActor, elem, 5000))
-                        .map(elem -> (Tuple2<UUID, String>)elem);
 
-        final BidiFlow<String, Tuple2<UUID, String>, Tuple2<UUID, String>, Try<String>, NotUsed> timeoutBidiFlow =
-                TimeoutBidiFlowUnordered.create(timeout, () -> UUID.randomUUID());
+        class DummyContext {
+            public DummyContext(String s, UUID uuid) {
+                this.s = s;
+                this.uuid = uuid;
+            }
+            String s;
+            UUID uuid;
+        }
+
+        final ActorRef delayActor = system.actorOf(Props.create(DelayActor.class));
+        final Flow<Tuple2<String, DummyContext>, Tuple2<String, DummyContext>, NotUsed> flow =
+                Flow.<Tuple2<String, DummyContext>>create()
+                        .mapAsyncUnordered(3, elem -> ask(delayActor, elem, 5000))
+                        .map(elem -> (Tuple2<String, DummyContext>)elem);
+
+        final BidiFlow<Tuple2<String, DummyContext>, Tuple2<String, DummyContext>, Tuple2<String, DummyContext>, Tuple2<Try<String>, DummyContext>, NotUsed> timeoutBidiFlow =
+                TimeoutBidiFlowUnordered.create(timeout, (DummyContext dummyContext) -> dummyContext.uuid);
 
         final CompletionStage<List<Try<String>>> result =
                 Source.from(Arrays.asList("a", "b", "c"))
+                        .map(s -> new Tuple2<>(s, new DummyContext("dummy", UUID.randomUUID())))
                         .via(timeoutBidiFlow.join(flow))
+                        .map(t -> t._1())
                         .runWith(Sink.seq(), mat);
         final List<Try<String>> expected = Arrays.asList(Success.apply("a"), Success.apply("c"), timeoutFailure);
         Assert.assertTrue(result.toCompletableFuture().get().containsAll(expected));

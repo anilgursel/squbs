@@ -53,30 +53,30 @@ import scala.util.{Failure, Success, Try}
   *
   * @param circuitBreaker Circuit Breaker implementation
   */
-class CircuitBreakerBidi[In, Out](circuitBreaker: CircuitBreakerLogic)
-  extends GraphStage[BidiShape[In, In, Try[Out], Try[Out]]] {
-  val in = Inlet[In]("CircuitBreakerBidi.in")
-  val fromWrapped = Inlet[Try[Out]]("CircuitBreakerBidi.fromWrapped")
-  val toWrapped = Outlet[In]("CircuitBreakerBidi.toWrapped")
-  val out = Outlet[Try[Out]]("CircuitBreakerBidi.out")
+class CircuitBreakerBidi[In, Out, Context, Id](circuitBreaker: CircuitBreakerLogic)
+  extends GraphStage[BidiShape[(In, Context), (In, Context), (Try[Out], Context), (Try[Out], Context)]] {
+  val in = Inlet[(In, Context)]("CircuitBreakerBidi.in")
+  val fromWrapped = Inlet[(Try[Out], Context)]("CircuitBreakerBidi.fromWrapped")
+  val toWrapped = Outlet[(In, Context)]("CircuitBreakerBidi.toWrapped")
+  val out = Outlet[(Try[Out], Context)]("CircuitBreakerBidi.out")
   val shape = BidiShape(in, toWrapped, fromWrapped, out)
   private var downstreamDemand = 0
   private var upstreamFinished = false
-  val readyToPush = mutable.Queue[Try[Out]]()
+  val readyToPush = mutable.Queue[(Try[Out], Context)]()
   private[this] def timerName = "CircuitBreakerBidi"
 
-  def this(maxFailures: Int,
-           callTimeout: FiniteDuration,
-           resetTimeout: FiniteDuration,
-           maxResetTimeout: FiniteDuration,
-           exponentialBackoffFactor: Double) =
-    this(new AtomicCircuitBreakerLogic(maxFailures, callTimeout, resetTimeout, maxResetTimeout, exponentialBackoffFactor))
-// TODO This should not access to Atomic
-  def this(maxFailures: Int,
-           callTimeout: FiniteDuration,
-           resetTimeout: FiniteDuration) = this(maxFailures, callTimeout, resetTimeout, 36500.days, 1.0)
+//  def this(maxFailures: Int,
+//           callTimeout: FiniteDuration,
+//           resetTimeout: FiniteDuration,
+//           maxResetTimeout: FiniteDuration,
+//           exponentialBackoffFactor: Double) =
+//    this(new AtomicCircuitBreakerLogic(maxFailures, callTimeout, resetTimeout, maxResetTimeout, exponentialBackoffFactor))
+//// TODO This should not access to Atomic
+//  def this(maxFailures: Int,
+//           callTimeout: FiniteDuration,
+//           resetTimeout: FiniteDuration) = this(maxFailures, callTimeout, resetTimeout, 36500.days, 1.0)
 
-  def onPushFromWrapped(elem: Try[Out], isOutAvailable: Boolean): Option[Try[Out]] = {
+  def onPushFromWrapped(elem: (Try[Out], Context), isOutAvailable: Boolean): Option[(Try[Out], Context)] = {
     readyToPush.enqueue(elem)
     if(isOutAvailable) Some(readyToPush.dequeue())
     else None
@@ -88,20 +88,20 @@ class CircuitBreakerBidi[In, Out](circuitBreaker: CircuitBreakerLogic)
 
     setHandler(in, new InHandler {
       override def onPush(): Unit = {
-        val elem = grab(in)
+        val (elem, context) = grab(in)
         print(s"---> onPushIn elem: ${elem.toString}  ")
         if(circuitBreaker.shortCircuit()) {
           print(s"short circuit: YES ")
           if(isAvailable(out) && readyToPush.isEmpty){
             println("push(out, Failure(CircuitBreakerOpenException()))")
-            push(out, Failure(CircuitBreakerOpenException()))
+            push(out, (Failure(CircuitBreakerOpenException()), context))
           } else {
-            readyToPush.enqueue(Failure(CircuitBreakerOpenException()))
+            readyToPush.enqueue((Failure(CircuitBreakerOpenException()), context))
             println("readyToPush.enqueue(Failure(CircuitBreakerOpenException()))")
           }
         } else {
           println(s" short circuit: NO push(toWrapped, ${elem.toString})")
-          push(toWrapped, elem) }
+          push(toWrapped, (elem, context)) }
       }
       override def onUpstreamFinish(): Unit = complete(toWrapped)
       override def onUpstreamFailure(ex: Throwable): Unit = fail(toWrapped, ex)
@@ -120,7 +120,7 @@ class CircuitBreakerBidi[In, Out](circuitBreaker: CircuitBreakerLogic)
 
     setHandler(fromWrapped, new InHandler {
       override def onPush(): Unit = {
-        val elem = grab(fromWrapped)
+        val (elem, context) = grab(fromWrapped)
         print(s"---> onPushFromWrapped elem: ")
         elem match {
             // TODO add metrics code here
@@ -132,8 +132,8 @@ class CircuitBreakerBidi[In, Out](circuitBreaker: CircuitBreakerLogic)
 
             circuitBreaker.fail(scheduleResetAttempt)
         }
-        onPushFromWrapped(elem, isAvailable(out)) foreach { elem =>
-          push(out, elem)
+        onPushFromWrapped((elem, context), isAvailable(out)) foreach { tuple =>
+          push(out, tuple)
           print(s"  push(out, ${elem.toString})")
         }
         println("")
@@ -151,10 +151,10 @@ class CircuitBreakerBidi[In, Out](circuitBreaker: CircuitBreakerLogic)
         print(s"---> onPullOut: ")
         if(!upstreamFinished || !readyToPush.isEmpty) {
           print(" NOT finished  ")
-          readyToPush.dequeueFirst((_: Try[Out]) => true) match {
-            case Some(elem) => {
-              println(s"push(out, ${elem.toString})")
-              push(out, elem)
+          readyToPush.dequeueFirst((_: (Try[Out], Context)) => true) match {
+            case Some(elemWithContext) => {
+              println(s"push(out, ${elemWithContext.toString})")
+              push(out, elemWithContext)
             }
             case None =>
               if(!hasBeenPulled(fromWrapped)) {

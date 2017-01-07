@@ -58,11 +58,11 @@ import scala.util.{Failure, Success, Try}
   * @param timeout Duration after which a message should be considered timed out.
   */
 abstract class TimeoutBidi[In, ToWrapped, FromWrapped, Out](timeout: FiniteDuration)
-  extends GraphStage[BidiShape[In, ToWrapped, FromWrapped, Try[Out]]] {
+  extends GraphStage[BidiShape[In, ToWrapped, FromWrapped, Out]] {
   val in = Inlet[In]("TimeoutBidi.in")
   val fromWrapped = Inlet[FromWrapped]("TimeoutBidi.fromWrapped")
   val toWrapped = Outlet[ToWrapped]("TimeoutBidi.toWrapped")
-  val out = Outlet[Try[Out]]("TimeoutBidi.out")
+  val out = Outlet[Out]("TimeoutBidi.out")
   val shape = BidiShape(in, toWrapped, fromWrapped, out)
   val expireOffset = timeout.toNanos
   private[this] def timerName = "TimeoutBidi"
@@ -73,11 +73,11 @@ abstract class TimeoutBidi[In, ToWrapped, FromWrapped, Out](timeout: FiniteDurat
 
   def mapFromInToWrapped(elem: In): ToWrapped
 
-  def onPushFromWrapped(elem: FromWrapped, isOutAvailable: Boolean): Option[Try[Out]]
+  def onPushFromWrapped(elem: FromWrapped, isOutAvailable: Boolean): Option[Out]
 
-  def onScheduledTimeout(): Option[Try[Out]]
+  def onScheduledTimeout(): Option[Out]
 
-  def onPullOut(): Option[Try[Out]]
+  def onPullOut(): Option[Out]
 
   def isBuffersEmpty(): Boolean
 
@@ -165,15 +165,16 @@ object TimeoutBidiFlowUnordered {
     *
     * @param timeout Duration after which a message should be considered timed out.
     */
-  def apply[In, Out](timeout: FiniteDuration): BidiFlow[In, (Long, In), (Long, Out), Try[Out], NotUsed] =
-    apply(timeout, LongIdGenerator().nextId())
+  def apply[In, Out, Context](timeout: FiniteDuration):
+  BidiFlow[(In, Context), (In, Context), (Out, Context), (Try[Out], Context), NotUsed] =
+    apply(timeout, (context: Context) => context)
 
   /**
     * Java API
     */
-  def create[In, Out](timeout: FiniteDuration):
-  akka.stream.javadsl.BidiFlow[In, (java.lang.Long, In), (java.lang.Long, Out), Try[Out], NotUsed] =
-    apply(timeout, LongIdGenerator().nextIdAsJava()).asJava
+  def create[In, Out, Context](timeout: FiniteDuration):
+  akka.stream.javadsl.BidiFlow[(In, Context), (In, Context), (Out, Context), (Try[Out], Context), NotUsed] =
+    apply(timeout, (context: Context) => context).asJava
 
   /**
     * Creates a BidiFlow that can be joined with a flow to add timeout functionality.  This API is specifically for
@@ -193,44 +194,50 @@ object TimeoutBidiFlowUnordered {
     * @param timeout Duration after which a message should be considered timeout out.
     * @param idGenerator Function that generates a unique id for each message
     */
-  def apply[In, Out, Id](timeout: FiniteDuration, idGenerator: () => Id):
-  BidiFlow[In, (Id, In), (Id, Out), Try[Out], NotUsed] =
-    BidiFlow.fromGraph(TimeoutBidiUnordered(timeout, idGenerator))
+  def apply[In, Out, Context, Id](timeout: FiniteDuration, uniqueId: Context => Id):
+  BidiFlow[(In, Context), (In, Context), (Out, Context), (Try[Out], Context), NotUsed] =
+    BidiFlow.fromGraph(TimeoutBidiUnordered(timeout, uniqueId))
 
   /**
     * Java API
     */
-  def create[In, Out, Id](timeout: FiniteDuration, idGenerator: Supplier[Id]):
-  akka.stream.javadsl.BidiFlow[In, (Id, In), (Id, Out), Try[Out], NotUsed] =
-    apply(timeout, () => idGenerator.get()).asJava
+  def create[In, Out, Context, Id](timeout: FiniteDuration, uniqueId: java.util.function.Function[Context, Id]):
+  akka.stream.javadsl.BidiFlow[(In, Context), (In, Context), (Out, Context), (Try[Out], Context), NotUsed] = {
+    import scala.compat.java8.FunctionConverters._
+    apply(timeout, uniqueId.asScala).asJava
+  }
 
 }
 
 object TimeoutBidiUnordered {
 
-  def apply[In, Out](timeout: FiniteDuration): TimeoutBidiUnordered[In, Out, Long] =
-    new TimeoutBidiUnordered(timeout, LongIdGenerator().nextId())
+  def apply[In, Out, Context](timeout: FiniteDuration):
+  TimeoutBidiUnordered[In, Out, Context, Context] =
+    new TimeoutBidiUnordered(timeout, (context: Context) => context)
 
-  def apply[In, Out, Id](timeout: FiniteDuration, idGenerator: () => Id): TimeoutBidiUnordered[In, Out, Id] =
-    new TimeoutBidiUnordered(timeout, idGenerator)
+  def apply[In, Out, Context, Id](timeout: FiniteDuration, uniqueId: (Context) => Id):
+  TimeoutBidiUnordered[In, Out, Context, Id] =
+    new TimeoutBidiUnordered(timeout, uniqueId)
 }
 
-final class TimeoutBidiUnordered[In, Out, Id](timeout: FiniteDuration, idGenerator: () => Id) extends
-  TimeoutBidi[In, (Id, In), (Id, Out), Out](timeout) {
+final class TimeoutBidiUnordered[In, Out, Context, Id](timeout: FiniteDuration, uniqueId: Context => Id) extends
+  TimeoutBidi[(In, Context), (In, Context), (Out, Context), (Try[Out], Context)](timeout) {
 
-  val timeouts = new mutable.LinkedHashMap[Id, (In, Long)]
-  val readyToPush = mutable.Queue[(Out, Long)]()
+  val timeouts = new mutable.LinkedHashMap[Id, (Context, Long)]
+  val readyToPush = mutable.Queue[((Try[Out], Context), Long)]()
 
-  override def mapFromInToWrapped(element: In): (Id, In) = {
-    val id = idGenerator()
-    timeouts.put(id, (element, System.nanoTime()))
-    (id, element)
+  // TODO See if we can eliminitate this, or rename
+  override def mapFromInToWrapped(elemWithContext: (In, Context)): (In, Context) = {
+    val (_, context) = elemWithContext
+    val id = uniqueId(context)
+    timeouts.put(id, (context, System.nanoTime()))
+    elemWithContext
   }
 
-  override def onPushFromWrapped(fromWrapped: (Id, Out), isOutAvailable: Boolean): Option[Try[Out]] = {
-    val (id, element) = fromWrapped
-    timeouts.remove(id) map { case(_, startTime) =>
-      readyToPush.enqueue((element, startTime))
+  override def onPushFromWrapped(fromWrapped: (Out, Context), isOutAvailable: Boolean): Option[(Try[Out], Context)] = {
+    val (elem, context) = fromWrapped
+    timeouts.remove(uniqueId(context)) map { case(_, startTime) =>
+      readyToPush.enqueue(((Success(elem), context), startTime))
     }
 
     if(isOutAvailable) pickNextElemToPush()
@@ -239,16 +246,16 @@ final class TimeoutBidiUnordered[In, Out, Id](timeout: FiniteDuration, idGenerat
 
   override def firstElemStartTime = timeouts.headOption map { case (_, (_, startTime)) => startTime } getOrElse(0)
 
-  private def pickNextElemToPush(): Option[Try[Out]] = {
+  private def pickNextElemToPush(): Option[(Try[Out], Context)] = {
     timeouts.headOption.filter { case(_, (_, firstElemStartTime)) =>
       firstElemStartTime < expirationTime &&
       readyToPush.headOption.filter { case(_, readyToPushStartTime) =>
         readyToPushStartTime <= firstElemStartTime
       }.isEmpty
-    } map { case(id, (_, _)) =>
+    } map { case(id, (context, _)) =>
       timeouts.remove(id)
-      Failure(FlowTimeoutException())
-    } orElse(Try(readyToPush.dequeue()).toOption.map { case(elem, _) => Success(elem)})
+      (Failure(FlowTimeoutException()), context)
+    } orElse(Try(readyToPush.dequeue()).toOption.map { case(elem, _) => elem})
   }
 
   override def onPullOut() = pickNextElemToPush()
@@ -284,7 +291,7 @@ object TimeoutBidiOrdered {
 }
 
 final class TimeoutBidiOrdered[In, Out](timeout: FiniteDuration) extends
-  TimeoutBidi[In, In, Out, Out](timeout) {
+  TimeoutBidi[In, In, Out, Try[Out]](timeout) {
 
   val timeouts = mutable.Queue[TimeoutTracker]()
 
@@ -314,25 +321,6 @@ final class TimeoutBidiOrdered[In, Out](timeout: FiniteDuration) extends
   override def isBuffersEmpty() = timeouts.isEmpty || timeouts.forall(_.isTimedOut == true)
 
   case class TimeoutTracker(startTime: Long, var isTimedOut: Boolean)
-}
-
-object LongIdGenerator {
-  def apply() = new LongIdGenerator()
-}
-
-class LongIdGenerator {
-  // This is not concurrent, nor needs it to be
-  var id = 0L
-
-  def nextId() = { () =>
-    // It may overflow, which should be ok for most scenarios.  If the message with id 0 is still not completed
-    // after it overflowed, then deduplication logic would be broken.  For such scenarios, a different
-    // id generator should be used.
-    id = id + 1
-    id
-  }
-
-  def nextIdAsJava(): () => java.lang.Long = { () => nextId()()}
 }
 
 case class FlowTimeoutException(msg: String = "Flow timed out!") extends TimeoutException(msg)

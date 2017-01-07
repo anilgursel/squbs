@@ -16,6 +16,8 @@
 
 package org.squbs.circuitbreaker
 
+import java.util.UUID
+
 import akka.actor.{Actor, ActorSystem, Props}
 import akka.stream.{ActorMaterializer, OverflowStrategy}
 import akka.stream.scaladsl.{BidiFlow, Flow, Sink, Source}
@@ -43,16 +45,18 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     val delayActor = system.actorOf(Props[DelayActor])
     import akka.pattern.ask
     implicit val askTimeout = Timeout(5.seconds)
-    val flow = Flow[(Long, String)].mapAsyncUnordered(20) { elem =>
-      (delayActor ? elem).mapTo[(Long, String)]
+    val flow = Flow[(String, UUID)].mapAsyncUnordered(20) { elem =>
+      (delayActor ? elem).mapTo[(String, UUID)]
     }
 
-    val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String](timeout)
+    val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String, UUID](timeout)
 
 
-    val circuitBreakerBidiFlow = BidiFlow.fromGraph(new CircuitBreakerBidi[String, String](circuitBreakerLogic))
+    val circuitBreakerBidiFlow = BidiFlow.fromGraph(new CircuitBreakerBidi[String, String, UUID, UUID]
+    (circuitBreakerLogic))
 
     Flow[String]
+      .map(s => (s, UUID.randomUUID()))
       .via(circuitBreakerBidiFlow.atop(timeoutBidiFlow).join(flow))
       .to(Sink.ignore)
       .runWith(Source.actorRef[String](5, OverflowStrategy.fail))
@@ -90,8 +94,8 @@ class DelayActor extends Actor {
     case element: String =>
       import context.dispatcher
       context.system.scheduler.scheduleOnce(delay(element), sender(), element)
-    case element: (Long, String) =>
+    case element: (String, Long) =>
       import context.dispatcher
-      context.system.scheduler.scheduleOnce(delay(element._2), sender(), element)
+      context.system.scheduler.scheduleOnce(delay(element._1), sender(), element)
   }
 }

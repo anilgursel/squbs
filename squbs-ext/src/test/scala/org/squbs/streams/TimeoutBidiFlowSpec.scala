@@ -96,12 +96,17 @@ class TimeoutBidiFlowSpec extends TestKit(ActorSystem("TimeoutBidiFlowSpec")) wi
     val delayActor = system.actorOf(Props[DelayActor])
     import akka.pattern.ask
     implicit val askTimeout = Timeout(5.seconds)
-    val flow = Flow[(Long, String)].mapAsyncUnordered(1) { elem =>
-      (delayActor ? elem).mapTo[(Long, String)]
+    val flow = Flow[(String, Long)].mapAsyncUnordered(1) { elem =>
+      (delayActor ? elem).mapTo[(String, Long)]
     }
 
-    val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String](timeout)
-    val result = Source("a" :: "b" :: "c" :: "c" :: "a" :: "a" :: Nil).via(timeoutBidiFlow.join(flow)).runWith(Sink.seq)
+    var id = 0L
+    val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String, Long](timeout)
+    val result = Source("a" :: "b" :: "c" :: "c" :: "a" :: "a" :: Nil)
+      .map { s => id += 1; (s, id) }
+      .via(timeoutBidiFlow.join(flow))
+      .map { case(s, _) => s }
+      .runWith(Sink.seq)
     val expected = Success("a") :: timeoutFailure :: Success("c") :: Success("c") :: Success("a") :: Success("a") :: Nil
     result map { _ should contain theSameElementsAs expected }
   }
@@ -116,9 +121,14 @@ class TimeoutBidiFlowSpec extends TestKit(ActorSystem("TimeoutBidiFlowSpec")) wi
   }
 
   it should "not complete the flow until timeout messages are sent when the unordered wrapped flow drop messages" in {
-    val flow = Flow[(Long, String)].filter(_ => false)
-    val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String](timeout)
-    val result = Source("a" :: "b" :: "c" :: Nil).via(timeoutBidiFlow.join(flow)).runWith(Sink.seq)
+    val flow = Flow[(String, Long)].filter(_ => false)
+    val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String, Long](timeout)
+    var id = 0L
+    val result = Source("a" :: "b" :: "c" :: Nil)
+      .map { s => id += 1; (s, id) }
+      .via(timeoutBidiFlow.join(flow))
+      .map { case(s, _) => s }
+      .runWith(Sink.seq)
     val expected = timeoutFailure :: timeoutFailure :: timeoutFailure :: Nil
     result map { _ should contain theSameElementsAs expected }
   }
@@ -127,28 +137,39 @@ class TimeoutBidiFlowSpec extends TestKit(ActorSystem("TimeoutBidiFlowSpec")) wi
     val delayActor = system.actorOf(Props[DelayActor])
     import akka.pattern.ask
     implicit val askTimeout = Timeout(5.seconds)
-    val flow = Flow[(Long, String)].mapAsyncUnordered(3) { elem =>
-      (delayActor ? elem).mapTo[(Long, String)]
+    val flow = Flow[(String, Long)].mapAsyncUnordered(3) { elem =>
+      (delayActor ? elem).mapTo[(String, Long)]
     }
 
-    val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String](timeout)
-    val result = Source("a" :: "b" :: "c" :: Nil).via(timeoutBidiFlow.join(flow)).runWith(Sink.seq)
+    var id = 0L
+    val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String, Long](timeout)
+    val result = Source("a" :: "b" :: "c" :: Nil)
+      .map { s => id += 1; (s, id) }
+      .via(timeoutBidiFlow.join(flow))
+      .map { case(s, _) => s }
+      .runWith(Sink.seq)
     // "c" does NOT fail because the original flow lets it go earlier than "b"
     val expected = Success("a") :: timeoutFailure :: Success("c") :: Nil
     result map { _ should contain theSameElementsAs expected }
   }
 
-  it should "allow a custom id generator to be passed in for flows that do not keep the order of messages" in {
+  it should "allow a custom uniqueId function to be passed in" in {
+    case class DummyContext(s: String, uudi: UUID)
+
     val delayActor = system.actorOf(Props[DelayActor])
     import akka.pattern.ask
     implicit val askTimeout = Timeout(5.seconds)
-    val flow = Flow[(UUID, String)].mapAsyncUnordered(3) { elem =>
-      (delayActor ? elem).mapTo[(UUID, String)]
+    val flow = Flow[(String, DummyContext)].mapAsyncUnordered(3) { elem =>
+      (delayActor ? elem).mapTo[(String, DummyContext)]
     }
 
-    val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String, UUID](timeout, () => UUID.randomUUID())
+    val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String, DummyContext, UUID](timeout, (d: DummyContext) => d.uudi)
 
-    val result = Source("a" :: "b" :: "c" :: Nil).via(timeoutBidiFlow.join(flow)).runWith(Sink.seq)
+    val result = Source("a" :: "b" :: "c" :: Nil)
+      .map { s => (s, DummyContext("dummy", UUID.randomUUID())) }
+      .via(timeoutBidiFlow.join(flow))
+      .map { case(s, _) => s }
+      .runWith(Sink.seq)
     // "c" does NOT fail because the original flow lets it go earlier than "b"
     val expected = Success("a") :: timeoutFailure :: Success("c") :: Nil
     result map { _ should contain theSameElementsAs expected }
@@ -163,8 +184,8 @@ class DelayActor extends Actor {
     case element: String =>
       import context.dispatcher
       context.system.scheduler.scheduleOnce(delay(element), sender(), element)
-    case element: (Long, String) =>
+    case element: (String, Long) =>
       import context.dispatcher
-      context.system.scheduler.scheduleOnce(delay(element._2), sender(), element)
+      context.system.scheduler.scheduleOnce(delay(element._1), sender(), element)
   }
 }
