@@ -27,6 +27,39 @@ import scala.concurrent.duration._
 
 
 /**
+  * Companion object providing factory methods for Circuit Breaker which runs callbacks in caller's thread
+  */
+object AtomicCircuitBreakerLogic {
+
+  /**
+    * Create a new CircuitBreaker.
+    *
+    * Callbacks run in caller's thread when using withSyncCircuitBreaker, and in same ExecutionContext as the passed
+    * in Future when using withCircuitBreaker. To use another ExecutionContext for the callbacks you can specify the
+    * executor in the constructor.
+    *
+    * @param maxFailures Maximum number of failures before opening the circuit
+    * @param callTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to consider a call a failure
+    * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
+    */
+  def apply(maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration): CircuitBreakerLogic =
+    new AtomicCircuitBreakerLogic(maxFailures, callTimeout, resetTimeout)
+  /**
+    * Java API: Create a new CircuitBreaker.
+    *
+    * Callbacks run in caller's thread when using withSyncCircuitBreaker, and in same ExecutionContext as the passed
+    * in Future when using withCircuitBreaker. To use another ExecutionContext for the callbacks you can specify the
+    * executor in the constructor.
+    *
+    * @param maxFailures Maximum number of failures before opening the circuit
+    * @param callTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to consider a call a failure
+    * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
+    */
+  def create(maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration): CircuitBreakerLogic =
+    apply(maxFailures, callTimeout, resetTimeout)
+}
+
+/**
   * Provides circuit breaker functionality to provide stability when working with "dangerous" operations, e.g. calls to
   * remote systems
   *
@@ -150,9 +183,6 @@ class AtomicCircuitBreakerLogic(maxFailures:              Int,
     * @param fromState State being transitioning from
     * @param toState State being transitioning from
     */
-  // TODO This should actually be done as _transition
-  // The reason is that, we do not want to mistake of implementations forgetting the eventbus call by missing the super
-  // call
   override def transitionImpl(fromState: CircuitBreakerState, toState: CircuitBreakerState): Boolean = {
     val internalFromState = mapToInternalState(fromState)
     val internalToState = mapToInternalState(toState)
@@ -183,19 +213,9 @@ class AtomicCircuitBreakerLogic(maxFailures:              Int,
     def callFails(f: (FiniteDuration => Unit)): Unit
 
     /**
-      * Invoked on the transitioned-to state during transition.  Notifies listeners after invoking subclass template
-      * method _enter
-      *
+      * Invoked on the transitioned-to state during transition.
       */
-    final def enter(): Unit = {
-      _enter()
-    }
-
-    /**
-      * Template method for concrete traits
-      *
-      */
-    def _enter(): Unit
+    def enter(): Unit
   }
 
   /**
@@ -234,7 +254,7 @@ class AtomicCircuitBreakerLogic(maxFailures:              Int,
       *
       * @return
       */
-    override def _enter(): Unit = {
+    override def enter(): Unit = {
       set(0)
       swapResetTimeout(currentResetTimeout, resetTimeout)
     }
@@ -290,7 +310,7 @@ class AtomicCircuitBreakerLogic(maxFailures:              Int,
       *
       * @return
       */
-    override def _enter(): Unit = set(true)
+    override def enter(): Unit = set(true)
 
     /**
       * Override for more descriptive toString
@@ -344,7 +364,7 @@ class AtomicCircuitBreakerLogic(maxFailures:              Int,
       *
       * @return
       */
-    override def _enter(): Unit = set(System.nanoTime())
+    override def enter(): Unit = set(System.nanoTime())
 
     /**
       * Override for more descriptive toString

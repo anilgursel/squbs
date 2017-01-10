@@ -1,48 +1,25 @@
+/*
+ * Copyright 2015 PayPal
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 package org.squbs.circuitbreaker
 
-// TODO Update the license header of this file!
-// Since it is mostly copied from Akka Contrib, removing the PayPal legal header.
 import akka.actor.ActorRef
 import akka.event.EventBus
-import org.squbs.circuitbreaker.impl.AtomicCircuitBreakerLogic
 
 import scala.concurrent.duration._
-
-/**
-  * Companion object providing factory methods for Circuit Breaker which runs callbacks in caller's thread
-  */
-object CircuitBreakerLogic {
-
-  /**
-    * Create a new CircuitBreaker.
-    *
-    * Callbacks run in caller's thread when using withSyncCircuitBreaker, and in same ExecutionContext as the passed
-    * in Future when using withCircuitBreaker. To use another ExecutionContext for the callbacks you can specify the
-    * executor in the constructor.
-    *
-    * @param scheduler Reference to Akka scheduler
-    * @param maxFailures Maximum number of failures before opening the circuit
-    * @param callTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to consider a call a failure
-    * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
-    */
-  def apply(maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration): CircuitBreakerLogic =
-    new AtomicCircuitBreakerLogic(maxFailures, callTimeout, resetTimeout)
-  /**
-    * Java API: Create a new CircuitBreaker.
-    *
-    * Callbacks run in caller's thread when using withSyncCircuitBreaker, and in same ExecutionContext as the passed
-    * in Future when using withCircuitBreaker. To use another ExecutionContext for the callbacks you can specify the
-    * executor in the constructor.
-    *
-    * @param scheduler Reference to Akka scheduler
-    * @param maxFailures Maximum number of failures before opening the circuit
-    * @param callTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to consider a call a failure
-    * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
-    */
-  def create(maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration): CircuitBreakerLogic =
-    apply(maxFailures, callTimeout, resetTimeout)
-}
 
 /**
   * Provides circuit breaker functionality to provide stability when working with "dangerous" operations, e.g. calls to
@@ -50,18 +27,15 @@ object CircuitBreakerLogic {
   *
   * Transitions through three states:
   * - In *Closed* state, calls pass through until the `maxFailures` count is reached.  This causes the circuit breaker
-  * to open.  Both exceptions and calls exceeding `callTimeout` are considered failures.
-  * - In *Open* state, calls fail-fast with an exception.  After `resetTimeout`, circuit breaker transitions to
-  * half-open state.
+  * to open.
+  * - In *Open* state, calls fail-fast with a [[scala.util.Failure]] or a fallback response.  After `resetTimeout`,
+  * circuit breaker transitions to half-open state.
   * - In *Half-Open* state, the first call will be allowed through, if it succeeds the circuit breaker will reset to
   * closed state.  If it fails, the circuit breaker will re-open to open state.  All calls beyond the first that
-  * execute while the first is running will fail-fast with an exception.
+  * execute while the first is running will fail-fast with [[scala.util.Failure]] or a fallback response.
   *
-  * @param scheduler Reference to Akka scheduler
-  * @param maxFailures Maximum number of failures before opening the circuit
-  * @param callTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to consider a call a failure
-  * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
-  * @param executor [[scala.concurrent.ExecutionContext]] used for execution of state transition listeners
+  * An [[ActorRef]] can be subscribed to receive certain events, e.g., [[TransitionEvents]] to receive all transition
+  * events or specific transtion events like [[Open]].  Going forward more CircuitBreaker events could be introduced.
   */
 trait CircuitBreakerLogic {
 
@@ -69,10 +43,10 @@ trait CircuitBreakerLogic {
   private val eventBus = new CircuitBreakerEventBusImpl
 
   /**
-    * TODO Add Javadoc
+    * Subscribe an [[ActorRef]] to receive events that it's interested in.
     *
-    * @param subscriber
-    * @param to
+    * @param subscriber [[ActorRef]] that would receive the events
+    * @param to event types that this [[ActorRef]] is interested in.
     * @return
     */
   def subscribe(subscriber: ActorRef, to: CircuitBreakerEventType): Boolean = {
