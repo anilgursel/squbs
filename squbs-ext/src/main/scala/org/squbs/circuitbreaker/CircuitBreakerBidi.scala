@@ -176,7 +176,7 @@ class CircuitBreakerBidi[In, Out, Context, Id](circuitBreaker: CircuitBreakerLog
 
     override def onTimer(timerKey: Any): Unit = {
       circuitBreaker.attemptReset()
-      if(!hasBeenPulled(in) && isAvailable(toWrapped)) pull(in)
+//      if(!hasBeenPulled(in) && isAvailable(toWrapped)) pull(in)
     }
 
     // TODO This could actually be moved to CircuitBreaker; however, then we need to make sure we do not schedule

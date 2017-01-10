@@ -59,7 +59,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
       .map(s => (s, UUID.randomUUID()))
       .via(circuitBreakerBidiFlow.atop(timeoutBidiFlow).join(flow))
       .to(Sink.ignore)
-      .runWith(Source.actorRef[String](5, OverflowStrategy.fail))
+      .runWith(Source.actorRef[String](25, OverflowStrategy.fail))
   }
 
   it should "increment failure count on call timeout" in {
@@ -81,6 +81,49 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     ref ! "b"
     expectMsg(Open)
     expectMsg(HalfOpen)
+    ref ! "a"
+    expectMsg(Closed)
+  }
+
+  it should "may messages" in {
+    val circuitBreakerLogic = new AtomicCircuitBreakerLogic(2, timeout, 10 milliseconds)
+    circuitBreakerLogic.subscribe(self, TransitionEvents)
+    val ref = flow(circuitBreakerLogic)
+    ref ! "a"
+    ref ! "b"
+    ref ! "b"
+    expectMsg(Open)
+    ref ! "b"
+    ref ! "b"
+    expectMsg(HalfOpen)
+    ref ! "b"
+    ref ! "b"
+    ref ! "b"
+    ref ! "b"
+    ref ! "b"
+    ref ! "b"
+    ref ! "b"
+    ref ! "b"
+    ref ! "b"
+    expectMsg(Open)
+    expectMsg(HalfOpen)
+    ref ! "a"
+    ref ! "a"
+    ref ! "a"
+    ref ! "a"
+    ref ! "a"
+    ref ! "a"
+    ref ! "a"
+    ref ! "a"
+    ref ! "a"
+    ref ! "a"
+    ref ! "a"
+    ref ! "a"
+    ref ! "a"
+    ref ! "a"
+    ref ! "a"
+    ref ! "a"
+    ref ! "a"
     ref ! "a"
     expectMsg(Closed)
   }
