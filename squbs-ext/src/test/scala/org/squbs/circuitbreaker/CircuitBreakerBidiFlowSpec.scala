@@ -23,6 +23,7 @@ import akka.stream.{ActorMaterializer, OverflowStrategy}
 import akka.stream.scaladsl.{BidiFlow, Flow, Sink, Source}
 import akka.testkit.{ImplicitSender, TestKit}
 import akka.util.Timeout
+import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.{FlatSpecLike, Matchers}
 import org.squbs.circuitbreaker.impl.AtomicCircuitBreakerState
 import org.squbs.streams.{FlowTimeoutException, TimeoutBidiFlowUnordered}
@@ -32,7 +33,7 @@ import scala.language.postfixOps
 import scala.util.{Failure, Success, Try}
 
 class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidiFlowSpec"))
-  with FlatSpecLike with Matchers with ImplicitSender {
+  with FlatSpecLike with Matchers with ImplicitSender with ScalaFutures {
 
   implicit val materializer = ActorMaterializer()
   import system.dispatcher
@@ -97,7 +98,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
       new CircuitBreakerBidi[String, String, UUID, UUID](circuitBreakerLogic, hasFailed = failureDecider)
     }
 
-    val flow = circuitBreakerBidiFlow.join(Flow[(String, UUID)].map{ case (s, uuid) => (Success(s), uuid) })
+    val flow = circuitBreakerBidiFlow.join(Flow[(String, UUID)].map { case (s, uuid) => (Success(s), uuid) })
 
     val ref = Flow[String]
       .map(s => (s, UUID.randomUUID())).via(flow)
@@ -113,18 +114,57 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     expectMsg(Closed)
   }
 
-//  it should "respond with fallback" in {
-//    val circuitBreakerLogic = new AtomicCircuitBreakerState(system.scheduler, 2, timeout, 10 milliseconds)
-//    circuitBreakerLogic.subscribe(self, TransitionEvents)
-//    val ref = flow(circuitBreakerLogic)
-//    ref ! "a"
-//    ref ! "b"
-//    ref ! "b"
-//    expectMsg(Open)
-//    expectMsg(HalfOpen)
-//    ref ! "a"
-//    expectMsg(Closed)
-//  }
+  it should "respond with fail-fast exception" in {
+    val circuitBreakerLogic = new AtomicCircuitBreakerState(system.scheduler, 2, timeout, 10 milliseconds)
+
+    val circuitBreakerBidiFlow = BidiFlow.fromGraph {
+      new CircuitBreakerBidi[String, String, Long, Long](circuitBreakerLogic)
+    }
+
+    val flowFailure = Failure(new RuntimeException("Some dummy exception!"))
+    val flow = Flow[(String, Long)].map {
+      case ("b", uuid) => (flowFailure, uuid)
+      case (elem, uuid) => (Success(elem), uuid)
+    }
+
+    var context = 0L
+    val result = Source("a" :: "b" :: "b" :: "a" :: Nil)
+      .map { s => context += 1; (s, context) }
+      .via(circuitBreakerBidiFlow.join(flow))
+      .runWith(Sink.seq)
+
+    val failFastFailure = Failure(CircuitBreakerOpenException())
+    val expected = (Success("a"), 1) :: (flowFailure, 2) :: (flowFailure, 3) :: (failFastFailure, 4) :: Nil
+    whenReady(result) { r =>
+      r should contain theSameElementsInOrderAs(expected)
+    }
+  }
+
+  it should "respond with fallback" in {
+    val circuitBreakerLogic = new AtomicCircuitBreakerState(system.scheduler, 2, timeout, 10 milliseconds)
+
+    val circuitBreakerBidiFlow = BidiFlow.fromGraph {
+      new CircuitBreakerBidi[String, String, Long, Long](circuitBreakerLogic,
+                                                        Some((elem: (String, Long)) => (Success("c"), elem._2)))
+    }
+
+    val flowFailure = Failure(new RuntimeException("Some dummy exception!"))
+    val flow = Flow[(String, Long)].map {
+      case ("b", uuid) => (flowFailure, uuid)
+      case (elem, uuid) => (Success(elem), uuid)
+    }
+
+    var context = 0L
+    val result = Source("a" :: "b" :: "b" :: "a" :: Nil)
+      .map { s => context += 1; (s, context) }
+      .via(circuitBreakerBidiFlow.join(flow))
+      .runWith(Sink.seq)
+
+    val expected = (Success("a"), 1) :: (flowFailure, 2) :: (flowFailure, 3) :: (Success("c"), 4) :: Nil
+    whenReady(result) { r =>
+      r should contain theSameElementsInOrderAs(expected)
+    }
+  }
 
   it should "may messages" in {
     val circuitBreakerLogic = new AtomicCircuitBreakerState(system.scheduler, 2, timeout, 10 milliseconds)
