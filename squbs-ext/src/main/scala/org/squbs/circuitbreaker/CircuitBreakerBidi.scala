@@ -76,7 +76,7 @@ class CircuitBreakerBidi[In, Out, Context, Id](circuitBreakerState: CircuitBreak
     setHandler(in, new InHandler {
       override def onPush(): Unit = {
         val (elem, context) = grab(in)
-        if(circuitBreakerState.isShortCircuited) {
+        if(circuitBreakerState.shortCircuited) {
           val failFast = fallback.map(_(elem, context)).getOrElse((Failure(CircuitBreakerOpenException()), context))
           if(isAvailable(out) && readyToPush.isEmpty) push(out, failFast)
           else readyToPush.enqueue(failFast)
@@ -95,8 +95,8 @@ class CircuitBreakerBidi[In, Out, Context, Id](circuitBreakerState: CircuitBreak
       override def onPush(): Unit = {
         val elemWithcontext = grab(fromWrapped)
 
-        if(hasFailed(elemWithcontext)) circuitBreakerState.fail()
-        else circuitBreakerState.succeed()
+        if(hasFailed(elemWithcontext)) circuitBreakerState.failure()
+        else circuitBreakerState.success()
 
         onPushFromWrapped(elemWithcontext, isAvailable(out)).foreach(tuple => push(out, tuple))
       }

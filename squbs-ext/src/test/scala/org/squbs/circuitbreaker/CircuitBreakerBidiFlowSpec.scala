@@ -16,7 +16,9 @@
 
 package org.squbs.circuitbreaker
 
+import java.lang.management.ManagementFactory
 import java.util.UUID
+import javax.management.ObjectName
 
 import akka.actor.{Actor, ActorSystem, Props}
 import akka.stream.{ActorMaterializer, OverflowStrategy}
@@ -25,7 +27,9 @@ import akka.testkit.{ImplicitSender, TestKit}
 import akka.util.Timeout
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.{FlatSpecLike, Matchers}
+import org.scalatest.OptionValues._
 import org.squbs.circuitbreaker.impl.AtomicCircuitBreakerState
+import org.squbs.metrics.MetricsExtension
 import org.squbs.streams.{FlowTimeoutException, TimeoutBidiFlowUnordered}
 
 import scala.concurrent.duration._
@@ -41,6 +45,8 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   val timeout = 60 milliseconds
   val timeoutFailure = Failure(FlowTimeoutException("Flow timed out!"))
   val circuitBreakerOpenFailure = Failure(CircuitBreakerOpenException("Circuit Breaker is open!"))
+
+  def atomicCircuitBreakerState = new AtomicCircuitBreakerState("TestCB", system.scheduler, 2, timeout, 10 milliseconds)
 
   def flow(circuitBreakerLogic: CircuitBreakerState) = {
     val delayActor = system.actorOf(Props[DelayActor])
@@ -64,9 +70,9 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   }
 
   it should "increment failure count on call timeout" in {
-    val circuitBreakerLogic = new AtomicCircuitBreakerState(system.scheduler, 2, timeout, 10 milliseconds)
-    circuitBreakerLogic.subscribe(self, Open)
-    val ref = flow(circuitBreakerLogic)
+    val circuitBreakerState = atomicCircuitBreakerState
+    circuitBreakerState.subscribe(self, Open)
+    val ref = flow(circuitBreakerState)
     ref ! "a"
     ref ! "b"
     ref ! "b"
@@ -74,9 +80,9 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   }
 
   it should "reset failure count after success" in {
-    val circuitBreakerLogic = new AtomicCircuitBreakerState(system.scheduler, 2, timeout, 10 milliseconds)
-    circuitBreakerLogic.subscribe(self, TransitionEvents)
-    val ref = flow(circuitBreakerLogic)
+    val circuitBreakerState = atomicCircuitBreakerState
+    circuitBreakerState.subscribe(self, TransitionEvents)
+    val ref = flow(circuitBreakerState)
     ref ! "a"
     ref ! "b"
     ref ! "b"
@@ -87,15 +93,15 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   }
 
   it should "increment failure count based on the provided function" in {
-    val circuitBreakerLogic = new AtomicCircuitBreakerState(system.scheduler, 2, timeout, 10 milliseconds)
-    circuitBreakerLogic.subscribe(self, TransitionEvents)
+    val circuitBreakerState = atomicCircuitBreakerState
+    circuitBreakerState.subscribe(self, TransitionEvents)
 
     def failureDecider(elem: (Try[String], UUID)): Boolean = elem match {
       case (Success("b"), _) => true
       case _ => false
     }
     val circuitBreakerBidiFlow = BidiFlow.fromGraph {
-      new CircuitBreakerBidi[String, String, UUID, UUID](circuitBreakerLogic, hasFailed = failureDecider)
+      new CircuitBreakerBidi[String, String, UUID, UUID](circuitBreakerState, hasFailed = failureDecider)
     }
 
     val flow = circuitBreakerBidiFlow.join(Flow[(String, UUID)].map { case (s, uuid) => (Success(s), uuid) })
@@ -115,10 +121,10 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   }
 
   it should "respond with fail-fast exception" in {
-    val circuitBreakerLogic = new AtomicCircuitBreakerState(system.scheduler, 2, timeout, 10 milliseconds)
+    val circuitBreakerState = atomicCircuitBreakerState
 
     val circuitBreakerBidiFlow = BidiFlow.fromGraph {
-      new CircuitBreakerBidi[String, String, Long, Long](circuitBreakerLogic)
+      new CircuitBreakerBidi[String, String, Long, Long](circuitBreakerState)
     }
 
     val flowFailure = Failure(new RuntimeException("Some dummy exception!"))
@@ -141,10 +147,10 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   }
 
   it should "respond with fallback" in {
-    val circuitBreakerLogic = new AtomicCircuitBreakerState(system.scheduler, 2, timeout, 10 milliseconds)
+    val circuitBreakerState = atomicCircuitBreakerState
 
     val circuitBreakerBidiFlow = BidiFlow.fromGraph {
-      new CircuitBreakerBidi[String, String, Long, Long](circuitBreakerLogic,
+      new CircuitBreakerBidi[String, String, Long, Long](circuitBreakerState,
                                                         Some((elem: (String, Long)) => (Success("c"), elem._2)))
     }
 
@@ -166,8 +172,41 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     }
   }
 
-  it should "may messages" in {
-    val circuitBreakerLogic = new AtomicCircuitBreakerState(system.scheduler, 2, timeout, 10 milliseconds)
+  it should "collect metrics" in {
+
+    def jmxValue(beanName: String, key: String): Option[AnyRef] = {
+      val oName = ObjectName.getInstance(s"${MetricsExtension(system).Domain}:name=$beanName")
+      Option(ManagementFactory.getPlatformMBeanServer.getAttribute(oName, key))
+    }
+
+    val circuitBreakerState =
+      new AtomicCircuitBreakerState(
+        "MetricsCB",
+        system.scheduler,
+        2,
+        timeout,
+        10 seconds,
+        10 seconds,
+        1.0,
+        Some(MetricsExtension(system).metrics))
+
+    circuitBreakerState.subscribe(self, TransitionEvents)
+    val ref = flow(circuitBreakerState)
+    jmxValue("MetricsCB.circuit-breaker.state", "Value").value shouldBe Closed
+    ref ! "a"
+    ref ! "b"
+    ref ! "b"
+    expectMsg(Open)
+    jmxValue("MetricsCB.circuit-breaker.state", "Value").value shouldBe Open
+    ref ! "a"
+    jmxValue("MetricsCB.circuit-breaker.success-count", "Count").value shouldBe 1
+    jmxValue("MetricsCB.circuit-breaker.failure-count", "Count").value shouldBe 2
+    // The processing of message "a" may take longer.
+    awaitAssert(jmxValue("MetricsCB.circuit-breaker.short-circuit-count", "Count").value shouldBe 1)
+  }
+
+  it should "many messages" in {
+    val circuitBreakerLogic = atomicCircuitBreakerState
     circuitBreakerLogic.subscribe(self, TransitionEvents)
     val ref = flow(circuitBreakerLogic)
     ref ! "a"

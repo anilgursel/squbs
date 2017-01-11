@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicLong}
 
 import akka.actor.Scheduler
 import akka.util.Unsafe
+import com.codahale.metrics.MetricRegistry
 import org.squbs.circuitbreaker._
 
 import scala.concurrent.ExecutionContext
@@ -47,7 +48,7 @@ object AtomicCircuitBreakerState {
     */
   def apply(scheduler: Scheduler, maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration)
            (implicit executor: ExecutionContext): CircuitBreakerState =
-    new AtomicCircuitBreakerState(scheduler, maxFailures, callTimeout, resetTimeout)
+    new AtomicCircuitBreakerState("", scheduler, maxFailures, callTimeout, resetTimeout)
   /**
     * Java API: Create a new CircuitBreaker.
     *
@@ -77,25 +78,29 @@ object AtomicCircuitBreakerState {
   * closed state.  If it fails, the circuit breaker will re-open to open state.  All calls beyond the first that
   * execute while the first is running will fail-fast with an exception.
   *
+  * @param name Name of this circuit breaker instance, mainly used to differentiate in metrics
   * @param scheduler Reference to Akka scheduler
   * @param maxFailures Maximum number of failures before opening the circuit
   * @param callTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to consider a call a failure
   * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
   * @param executor [[scala.concurrent.ExecutionContext]] used for execution of state transition listeners
   */
-class AtomicCircuitBreakerState(scheduler:                Scheduler,
+class AtomicCircuitBreakerState(val name:       String,
+                                scheduler:                Scheduler,
                                 maxFailures:              Int,
                                 callTimeout:              FiniteDuration,
                                 resetTimeout:             FiniteDuration,
                                 maxResetTimeout:          FiniteDuration,
-                                exponentialBackoffFactor: Double)(implicit executor: ExecutionContext)
+                                exponentialBackoffFactor: Double,
+                                val metricRegistry: Option[MetricRegistry])
+                               (implicit executor: ExecutionContext)
   extends AbstractAtomicCircuitBreakerLogic with CircuitBreakerState {
 
   require(exponentialBackoffFactor >= 1.0, "factor must be >= 1.0")
 
-  def this(scheduler: Scheduler, maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration)
+  def this(name: String, scheduler: Scheduler, maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration)
           (implicit executor: ExecutionContext)= {
-    this(scheduler, maxFailures, callTimeout, resetTimeout, 36500.days, 1.0)
+    this(name, scheduler, maxFailures, callTimeout, resetTimeout, 36500.days, 1.0, None)
   }
 
   /**
@@ -105,7 +110,15 @@ class AtomicCircuitBreakerState(scheduler:                Scheduler,
     * @param maxResetTimeout the upper bound of resetTimeout
     */
   def withExponentialBackoff(maxResetTimeout: FiniteDuration): AtomicCircuitBreakerState = {
-    new AtomicCircuitBreakerState(scheduler, maxFailures, callTimeout, resetTimeout, maxResetTimeout, 2.0)(executor)
+    new AtomicCircuitBreakerState(
+      name,
+      scheduler,
+      maxFailures,
+      callTimeout,
+      resetTimeout,
+      maxResetTimeout,
+      2.0,
+      metricRegistry)(executor)
   }
 
   /**
@@ -128,7 +141,7 @@ class AtomicCircuitBreakerState(scheduler:                Scheduler,
     * @return Whether the previous state matched correctly
     */
   @inline
-  private[this] def swapState(oldState: AtomicState, newState: AtomicState): Boolean =
+  private[this] def swapAtomicState(oldState: AtomicState, newState: AtomicState): Boolean =
   Unsafe.instance.compareAndSwapObject(this, AbstractAtomicCircuitBreakerLogic.stateOffset, oldState, newState)
 
   /**
@@ -137,7 +150,7 @@ class AtomicCircuitBreakerState(scheduler:                Scheduler,
     * @return Reference to current state
     */
   @inline
-  private[this] def currentState: AtomicState =
+  private[this] def currentAtomicState: AtomicState =
   Unsafe.instance.getObjectVolatile(this, AbstractAtomicCircuitBreakerLogic.stateOffset).asInstanceOf[AtomicState]
 
   /**
@@ -157,23 +170,30 @@ class AtomicCircuitBreakerState(scheduler:                Scheduler,
   /**
     * Mark a successful call through CircuitBreaker.
     */
-  def succeed(): Unit = currentState.succeed()
+  def succeeds(): Unit = currentAtomicState.succeeds()
 
   /**
     * Mark a failed call through CircuitBreaker.
     */
-  def fail(): Unit = currentState.fail()
+  def fails(): Unit = currentAtomicState.fails()
 
   /**
     * Check if circuit should be short circuited.
     */
-  def isShortCircuited(): Boolean = currentState.isShortCircuited
+  def isShortCircuited(): Boolean = currentAtomicState.isShortCircuited
 
-  private val mapToInternalState = Map(
+  /**
+    * Get the current state of the Circuit Breaker.
+    */
+  def currentState = mapFromAtomicStateToState(currentAtomicState)
+
+  private val mapToAtomicState = Map(
     Closed -> AtomicClosed,
     Open -> AtomicOpen,
     HalfOpen -> AtomicHalfOpen
   )
+
+  private val mapFromAtomicStateToState: Map[AtomicState, State] = mapToAtomicState.map(_.swap)
 
   /**
     * Implements consistent transition between states. Throws IllegalStateException if an invalid transition is attempted.
@@ -182,10 +202,10 @@ class AtomicCircuitBreakerState(scheduler:                Scheduler,
     * @param toState State being transitioning from
     */
   override def transitionImpl(fromState: State, toState: State): Boolean = {
-    val internalFromState = mapToInternalState(fromState)
-    val internalToState = mapToInternalState(toState)
-    val isTransitioned = swapState(internalFromState, internalToState)
-    if (isTransitioned) internalToState.enter()
+    val fromAtomicState = mapToAtomicState(fromState)
+    val toAtomicState = mapToAtomicState(toState)
+    val isTransitioned = swapAtomicState(fromAtomicState, toAtomicState)
+    if (isTransitioned) toAtomicState.enter()
     // else some other thread already swapped state
     isTransitioned
   }
@@ -206,13 +226,13 @@ class AtomicCircuitBreakerState(scheduler:                Scheduler,
       * Invoked when call succeeds
       *
       */
-    def succeed(): Unit
+    def succeeds(): Unit
 
     /**
       * Invoked when call fails
       *
       */
-    def fail(): Unit
+    def fails(): Unit
 
     /**
       * Invoked on the transitioned-to state during transition.
@@ -237,7 +257,7 @@ class AtomicCircuitBreakerState(scheduler:                Scheduler,
       *
       * @return
       */
-    override def succeed(): Unit = set(0)
+    override def succeeds(): Unit = set(0)
 
     /**
       * On failed call, the failure count is incremented.  The count is checked against the configured maxFailures, and
@@ -245,7 +265,7 @@ class AtomicCircuitBreakerState(scheduler:                Scheduler,
       *
       * @return
       */
-    override def fail(): Unit = if (incrementAndGet() == maxFailures) tripBreaker(Closed)
+    override def fails(): Unit = if (incrementAndGet() == maxFailures) tripBreaker(Closed)
 
     /**
       * On entry of this state, failure count and resetTimeout is reset.
@@ -283,14 +303,14 @@ class AtomicCircuitBreakerState(scheduler:                Scheduler,
       *
       * @return
       */
-    override def succeed(): Unit = resetBreaker()
+    override def succeeds(): Unit = resetBreaker()
 
     /**
       * Reopen breaker on failed call.
       *
       * @return
       */
-    override def fail(): Unit = tripBreaker(HalfOpen)
+    override def fails(): Unit = tripBreaker(HalfOpen)
 
     /**
       * On entry, guard should be reset for that first call to get in
@@ -336,14 +356,14 @@ class AtomicCircuitBreakerState(scheduler:                Scheduler,
       *
       * @return
       */
-    override def succeed(): Unit = ()
+    override def succeeds(): Unit = ()
 
     /**
       * No-op for open, calls are never executed so cannot succeed or fail
       *
       * @return
       */
-    override def fail(): Unit = ()
+    override def fails(): Unit = ()
 
     /**
       * On entering this state, schedule an attempted reset via [[akka.actor.Scheduler]] and store the entry time to
@@ -373,5 +393,4 @@ class AtomicCircuitBreakerState(scheduler:                Scheduler,
       */
     override def toString: String = "AtomicOpen"
   }
-
 }

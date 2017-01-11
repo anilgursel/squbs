@@ -18,6 +18,7 @@ package org.squbs.circuitbreaker
 
 import akka.actor.ActorRef
 import akka.event.EventBus
+import com.codahale.metrics.{Gauge, MetricRegistry}
 
 import scala.concurrent.duration._
 
@@ -41,6 +42,19 @@ trait CircuitBreakerState {
 
   private val eventBus = new CircuitBreakerEventBusImpl
 
+  val metricRegistry: Option[MetricRegistry]
+  val name: String
+  private val metrics = metricRegistry.getOrElse(new MetricRegistry)
+  private val SuccessCount = s"$name.circuit-breaker.success-count"
+  private val FailureCount = s"$name.circuit-breaker.failure-count"
+  private val ShortCircuitCount = s"$name.circuit-breaker.short-circuit-count"
+
+  object StateGauge extends Gauge[State] {
+    override def getValue: State = currentState
+  }
+
+  metrics.register(s"$name.circuit-breaker.state", StateGauge)
+
   /**
     * Subscribe an [[ActorRef]] to receive events that it's interested in.
     *
@@ -61,19 +75,37 @@ trait CircuitBreakerState {
   def withExponentialBackoff(maxResetTimeout: FiniteDuration): CircuitBreakerState
 
   /**
-    * Mark a successful call through CircuitBreaker.
+    * Mark a successful element through CircuitBreaker.
     */
-  def succeed(): Unit
+  def success(): Unit = {
+    metrics.meter(SuccessCount).mark()
+    succeeds()
+  }
 
   /**
-    * Mark a failed call through CircuitBreaker.
+    * Mark a failed element through CircuitBreaker.
     */
-  def fail(): Unit
+  def failure(): Unit = {
+    metrics.meter(FailureCount).mark()
+    fails()
+  }
 
   /**
     * Check if circuit should be short circuited.
     */
-  def isShortCircuited: Boolean
+  def shortCircuited(): Boolean = {
+    val shortCircuited = isShortCircuited
+    if(shortCircuited) metrics.meter(ShortCircuitCount).mark()
+    shortCircuited
+  }
+
+  protected def succeeds(): Unit
+
+  protected def fails(): Unit
+
+  protected def isShortCircuited: Boolean
+
+  protected def currentState: State
 
   /**
     * Implements consistent transition between states. Throws IllegalStateException if an invalid transition is attempted.
