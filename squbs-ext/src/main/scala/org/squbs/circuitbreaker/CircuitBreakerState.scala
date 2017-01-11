@@ -84,6 +84,11 @@ trait CircuitBreakerState {
   protected final def transition(fromState: State, toState: State): Unit = {
     if(transitionImpl(fromState, toState))
       eventBus.publish(CircuitBreakerEvent(toState, toState))
+
+    // TODO add metrics code in fail and succeed..
+    // Also, make the current state a Gauge so that it automatically gets exposed
+    // as JMX.  So, the current state gauge should be set here.
+    // Also, CircuitBreakerState should have a name function for metrics.
   }
 
   protected def transitionImpl(fromState: State, toState: State): Boolean

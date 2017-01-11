@@ -51,17 +51,17 @@ import scala.util.{Failure, Success, Try}
   *
   * @param circuitBreakerState Circuit Breaker implementation
   */
-class CircuitBreakerBidi[In, Out, Context, Id](circuitBreakerState: CircuitBreakerState)
+class CircuitBreakerBidi[In, Out, Context, Id](circuitBreakerState: CircuitBreakerState,
+                                               fallback: Option[((In, Context)) => (Try[Out], Context)] = None,
+                                               hasFailed: ((Try[Out], Context)) => Boolean = (e: (Try[Out], Context)) => e._1.isFailure)
   extends GraphStage[BidiShape[(In, Context), (In, Context), (Try[Out], Context), (Try[Out], Context)]] {
   val in = Inlet[(In, Context)]("CircuitBreakerBidi.in")
   val fromWrapped = Inlet[(Try[Out], Context)]("CircuitBreakerBidi.fromWrapped")
   val toWrapped = Outlet[(In, Context)]("CircuitBreakerBidi.toWrapped")
   val out = Outlet[(Try[Out], Context)]("CircuitBreakerBidi.out")
   val shape = BidiShape(in, toWrapped, fromWrapped, out)
-  private var downstreamDemand = 0
   private var upstreamFinished = false
   val readyToPush = mutable.Queue[(Try[Out], Context)]()
-  private[this] def timerName = "CircuitBreakerBidi"
 
   def onPushFromWrapped(elem: (Try[Out], Context), isOutAvailable: Boolean): Option[(Try[Out], Context)] = {
     readyToPush.enqueue(elem)
@@ -76,54 +76,29 @@ class CircuitBreakerBidi[In, Out, Context, Id](circuitBreakerState: CircuitBreak
     setHandler(in, new InHandler {
       override def onPush(): Unit = {
         val (elem, context) = grab(in)
-        print(s"---> onPushIn elem: ${elem.toString}  ")
         if(circuitBreakerState.isShortCircuited) {
-          print(s"short circuit: YES ")
-          if(isAvailable(out) && readyToPush.isEmpty){
-            println("push(out, Failure(CircuitBreakerOpenException()))")
-            push(out, (Failure(CircuitBreakerOpenException()), context))
-          } else {
-            readyToPush.enqueue((Failure(CircuitBreakerOpenException()), context))
-            println("readyToPush.enqueue(Failure(CircuitBreakerOpenException()))")
-          }
-        } else {
-          println(s" short circuit: NO push(toWrapped, ${elem.toString})")
-          push(toWrapped, (elem, context)) }
+          val failFast = fallback.map(_(elem, context)).getOrElse((Failure(CircuitBreakerOpenException()), context))
+          if(isAvailable(out) && readyToPush.isEmpty) push(out, failFast)
+          else readyToPush.enqueue(failFast)
+        } else push(toWrapped, (elem, context))
       }
       override def onUpstreamFinish(): Unit = complete(toWrapped)
       override def onUpstreamFailure(ex: Throwable): Unit = fail(toWrapped, ex)
     })
 
     setHandler(toWrapped, new OutHandler {
-      override def onPull(): Unit = {
-        print("---> onPullToWrapped  ")
-        if(!hasBeenPulled(in)) {
-          println("pull(in)")
-          pull(in)
-        } else println("NOT pull(in)")
-      }
+      override def onPull(): Unit = if(!hasBeenPulled(in)) pull(in)
       override def onDownstreamFinish(): Unit = completeStage()
     })
 
     setHandler(fromWrapped, new InHandler {
       override def onPush(): Unit = {
-        val (elem, context) = grab(fromWrapped)
-        print(s"---> onPushFromWrapped elem: ")
-        elem match {
-            // TODO add metrics code here
-          case Success(_) =>
-            circuitBreakerState.succeed()
-            print(s"${elem.toString}  ")
-          case Failure(_) =>
-            print("TimeoutException  ")
+        val elemWithcontext = grab(fromWrapped)
 
-            circuitBreakerState.fail()
-        }
-        onPushFromWrapped((elem, context), isAvailable(out)) foreach { tuple =>
-          push(out, tuple)
-          print(s"  push(out, ${elem.toString})")
-        }
-        println("")
+        if(hasFailed(elemWithcontext)) circuitBreakerState.fail()
+        else circuitBreakerState.succeed()
+
+        onPushFromWrapped(elemWithcontext, isAvailable(out)).foreach(tuple => push(out, tuple))
       }
       override def onUpstreamFinish(): Unit = {
         if(readyToPush.isEmpty) completeStage()
@@ -134,30 +109,15 @@ class CircuitBreakerBidi[In, Out, Context, Id](circuitBreakerState: CircuitBreak
     })
 
     setHandler(out, new OutHandler {
-      override def onPull(): Unit = {
-        print(s"---> onPullOut: ")
-        if(!upstreamFinished || !readyToPush.isEmpty) {
-          print(" NOT finished  ")
-          readyToPush.dequeueFirst((_: (Try[Out], Context)) => true) match {
-            case Some(elemWithContext) => {
-              println(s"push(out, ${elemWithContext.toString})")
-              push(out, elemWithContext)
-            }
-            case None =>
-              if(!hasBeenPulled(fromWrapped)) {
-                println("pull(fromWrapped)")
-                pull(fromWrapped)
-              }
-              else if(!hasBeenPulled(in) && isAvailable(toWrapped)) {
-                println("pull(in)")
-                pull(in)
-              } else println("do nothing")
-          }
-        } else {
-          println("complete(out)")
-          complete(out)
+      override def onPull(): Unit =
+        if(!upstreamFinished || !readyToPush.isEmpty) readyToPush.dequeueFirst((_: (Try[Out], Context)) => true) match {
+          case Some(elemWithContext) => push(out, elemWithContext)
+          case None =>
+            if(!hasBeenPulled(fromWrapped)) pull(fromWrapped)
+            else if(!hasBeenPulled(in) && isAvailable(toWrapped)) pull(in)
         }
-      }
+        else complete(out)
+
       override def onDownstreamFinish(): Unit = cancel(fromWrapped)
     })
   }
