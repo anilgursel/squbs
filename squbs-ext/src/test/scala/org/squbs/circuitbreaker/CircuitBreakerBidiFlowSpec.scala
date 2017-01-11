@@ -29,7 +29,7 @@ import org.squbs.streams.{FlowTimeoutException, TimeoutBidiFlowUnordered}
 
 import scala.concurrent.duration._
 import scala.language.postfixOps
-import scala.util.Failure
+import scala.util.{Failure, Success, Try}
 
 class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidiFlowSpec"))
   with FlatSpecLike with Matchers with ImplicitSender {
@@ -84,6 +84,47 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     ref ! "a"
     expectMsg(Closed)
   }
+
+  it should "increment failure count based on the provided function" in {
+    val circuitBreakerLogic = new AtomicCircuitBreakerState(system.scheduler, 2, timeout, 10 milliseconds)
+    circuitBreakerLogic.subscribe(self, TransitionEvents)
+
+    def failureDecider(elem: (Try[String], UUID)): Boolean = elem match {
+      case (Success("b"), _) => true
+      case _ => false
+    }
+    val circuitBreakerBidiFlow = BidiFlow.fromGraph {
+      new CircuitBreakerBidi[String, String, UUID, UUID](circuitBreakerLogic, hasFailed = failureDecider)
+    }
+
+    val flow = circuitBreakerBidiFlow.join(Flow[(String, UUID)].map{ case (s, uuid) => (Success(s), uuid) })
+
+    val ref = Flow[String]
+      .map(s => (s, UUID.randomUUID())).via(flow)
+      .to(Sink.ignore)
+      .runWith(Source.actorRef[String](25, OverflowStrategy.fail))
+
+    ref ! "a"
+    ref ! "b"
+    ref ! "b"
+    expectMsg(Open)
+    expectMsg(HalfOpen)
+    ref ! "a"
+    expectMsg(Closed)
+  }
+
+//  it should "respond with fallback" in {
+//    val circuitBreakerLogic = new AtomicCircuitBreakerState(system.scheduler, 2, timeout, 10 milliseconds)
+//    circuitBreakerLogic.subscribe(self, TransitionEvents)
+//    val ref = flow(circuitBreakerLogic)
+//    ref ! "a"
+//    ref ! "b"
+//    ref ! "b"
+//    expectMsg(Open)
+//    expectMsg(HalfOpen)
+//    ref ! "a"
+//    expectMsg(Closed)
+//  }
 
   it should "may messages" in {
     val circuitBreakerLogic = new AtomicCircuitBreakerState(system.scheduler, 2, timeout, 10 milliseconds)
