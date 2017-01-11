@@ -73,7 +73,7 @@ trait CircuitBreakerLogic {
     * caller Actor. In such a case, it is convenient to mark a failed call instead of using Future
     * via [[withCircuitBreaker]]
     */
-  def fail(f: (FiniteDuration => Unit)): Unit
+  def fail(): Unit
 
   def shortCircuit(): Boolean
 

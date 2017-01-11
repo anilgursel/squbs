@@ -35,7 +35,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   with FlatSpecLike with Matchers with ImplicitSender {
 
   implicit val materializer = ActorMaterializer()
-
+  import system.dispatcher
 
   val timeout = 60 milliseconds
   val timeoutFailure = Failure(FlowTimeoutException("Flow timed out!"))
@@ -63,7 +63,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   }
 
   it should "increment failure count on call timeout" in {
-    val circuitBreakerLogic = new AtomicCircuitBreakerLogic(2, timeout, 10 milliseconds)
+    val circuitBreakerLogic = new AtomicCircuitBreakerLogic(system.scheduler, 2, timeout, 10 milliseconds)
     circuitBreakerLogic.subscribe(self, Open)
     val ref = flow(circuitBreakerLogic)
     ref ! "a"
@@ -73,7 +73,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   }
 
   it should "reset failure count after success" in {
-    val circuitBreakerLogic = new AtomicCircuitBreakerLogic(2, timeout, 10 milliseconds)
+    val circuitBreakerLogic = new AtomicCircuitBreakerLogic(system.scheduler, 2, timeout, 10 milliseconds)
     circuitBreakerLogic.subscribe(self, TransitionEvents)
     val ref = flow(circuitBreakerLogic)
     ref ! "a"
@@ -86,7 +86,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   }
 
   it should "may messages" in {
-    val circuitBreakerLogic = new AtomicCircuitBreakerLogic(2, timeout, 10 milliseconds)
+    val circuitBreakerLogic = new AtomicCircuitBreakerLogic(system.scheduler, 2, timeout, 10 milliseconds)
     circuitBreakerLogic.subscribe(self, TransitionEvents)
     val ref = flow(circuitBreakerLogic)
     ref ! "a"

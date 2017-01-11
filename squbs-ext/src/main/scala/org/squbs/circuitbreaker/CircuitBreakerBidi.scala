@@ -130,7 +130,7 @@ class CircuitBreakerBidi[In, Out, Context, Id](circuitBreaker: CircuitBreakerLog
           case Failure(_) =>
             print("TimeoutException  ")
 
-            circuitBreaker.fail(scheduleResetAttempt)
+            circuitBreaker.fail()
         }
         onPushFromWrapped((elem, context), isAvailable(out)) foreach { tuple =>
           push(out, tuple)
@@ -175,7 +175,7 @@ class CircuitBreakerBidi[In, Out, Context, Id](circuitBreaker: CircuitBreakerLog
     })
 
     override def onTimer(timerKey: Any): Unit = {
-      circuitBreaker.attemptReset()
+//      circuitBreaker.attemptReset()
 //      if(!hasBeenPulled(in) && isAvailable(toWrapped)) pull(in)
     }
 
@@ -183,7 +183,7 @@ class CircuitBreakerBidi[In, Out, Context, Id](circuitBreaker: CircuitBreakerLog
     // a timer if already one scheduled.  It is a scenario that should not happen though.
     // The other thing to consider is which thread the scheduled task would run.  Doing this way ensure `onTimer` being
     // called in the same thread.
-    private def scheduleResetAttempt(d: FiniteDuration): Unit = if(!isTimerActive(timerName)) scheduleOnce(timerName, d)
+//    private def scheduleResetAttempt(d: FiniteDuration): Unit = if(!isTimerActive(timerName)) scheduleOnce(timerName, d)
   }
 
   override def toString = "CircuitBreakerBidi"

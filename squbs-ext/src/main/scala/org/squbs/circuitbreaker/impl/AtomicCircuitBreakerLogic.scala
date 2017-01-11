@@ -14,15 +14,20 @@
  * limitations under the License.
  */
 
+/**
+  * Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
+  */
+
 package org.squbs.circuitbreaker.impl
 
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicLong}
 
-import akka.actor.ActorRef
+import akka.actor.{ActorRef, Scheduler}
 import akka.util.Unsafe
 import org.squbs.circuitbreaker._
 
+import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
 
@@ -42,8 +47,9 @@ object AtomicCircuitBreakerLogic {
     * @param callTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to consider a call a failure
     * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
     */
-  def apply(maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration): CircuitBreakerLogic =
-    new AtomicCircuitBreakerLogic(maxFailures, callTimeout, resetTimeout)
+  def apply(scheduler: Scheduler, maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration)
+           (implicit executor: ExecutionContext): CircuitBreakerLogic =
+    new AtomicCircuitBreakerLogic(scheduler, maxFailures, callTimeout, resetTimeout)
   /**
     * Java API: Create a new CircuitBreaker.
     *
@@ -55,8 +61,10 @@ object AtomicCircuitBreakerLogic {
     * @param callTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to consider a call a failure
     * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
     */
-  def create(maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration): CircuitBreakerLogic =
-    apply(maxFailures, callTimeout, resetTimeout)
+  def create(scheduler: Scheduler, maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration,
+             executor: ExecutionContext):
+  CircuitBreakerLogic =
+    apply(scheduler, maxFailures, callTimeout, resetTimeout)(executor)
 }
 
 /**
@@ -78,17 +86,19 @@ object AtomicCircuitBreakerLogic {
   * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
   * @param executor [[scala.concurrent.ExecutionContext]] used for execution of state transition listeners
   */
-class AtomicCircuitBreakerLogic(maxFailures:              Int,
+class AtomicCircuitBreakerLogic(scheduler:                Scheduler,
+                                maxFailures:              Int,
                                 val callTimeout:          FiniteDuration,
                                 resetTimeout:             FiniteDuration,
                                 maxResetTimeout:          FiniteDuration,
-                                exponentialBackoffFactor: Double) extends AbstractAtomicCircuitBreakerLogic
-  with CircuitBreakerLogic {
+                                exponentialBackoffFactor: Double)(implicit executor: ExecutionContext)
+  extends AbstractAtomicCircuitBreakerLogic with CircuitBreakerLogic {
 
   require(exponentialBackoffFactor >= 1.0, "factor must be >= 1.0")
 
-  def this(maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration) = {
-    this(maxFailures, callTimeout, resetTimeout, 36500.days, 1.0)
+  def this(scheduler: Scheduler, maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration)
+          (implicit executor: ExecutionContext)= {
+    this(scheduler, maxFailures, callTimeout, resetTimeout, 36500.days, 1.0)
   }
 
   /**
@@ -98,7 +108,7 @@ class AtomicCircuitBreakerLogic(maxFailures:              Int,
     * @param maxResetTimeout the upper bound of resetTimeout
     */
   def withExponentialBackoff(maxResetTimeout: FiniteDuration): AtomicCircuitBreakerLogic = {
-    new AtomicCircuitBreakerLogic(maxFailures, callTimeout, resetTimeout, maxResetTimeout, 2.0)
+    new AtomicCircuitBreakerLogic(scheduler, maxFailures, callTimeout, resetTimeout, maxResetTimeout, 2.0)(executor)
   }
 
   /**
@@ -161,10 +171,10 @@ class AtomicCircuitBreakerLogic(maxFailures:              Int,
     * caller Actor. In such a case, it is convenient to mark a failed call instead of using Future
     * via [[withCircuitBreaker]]
     */
-  def fail(f: (FiniteDuration => Unit)): Unit = {
+  def fail(): Unit = {
 
     // TODO Should we do a check "if !isTimerActive" ?
-    currentState.callFails(f)
+    currentState.callFails()
   }
 
   def shortCircuit(): Boolean = {
@@ -210,7 +220,7 @@ class AtomicCircuitBreakerLogic(maxFailures:              Int,
       * Invoked when call fails
       *
       */
-    def callFails(f: (FiniteDuration => Unit)): Unit
+    def callFails(): Unit
 
     /**
       * Invoked on the transitioned-to state during transition.
@@ -243,10 +253,13 @@ class AtomicCircuitBreakerLogic(maxFailures:              Int,
       *
       * @return
       */
-    override def callFails(f: (FiniteDuration => Unit)): Unit =
+    override def callFails(): Unit =
       if (incrementAndGet() == maxFailures) {
         tripBreaker(Closed)
-        f(currentResetTimeout)
+//        f(currentResetTimeout)
+        scheduler.scheduleOnce(currentResetTimeout) {
+          attemptReset()
+        }
       }
 
     /**
@@ -292,7 +305,7 @@ class AtomicCircuitBreakerLogic(maxFailures:              Int,
       *
       * @return
       */
-    override def callFails(f: (FiniteDuration => Unit)): Unit = {
+    override def callFails(): Unit = {
       tripBreaker(HalfOpen)
       val nextResetTimeout = currentResetTimeout * exponentialBackoffFactor match {
         case f: FiniteDuration ⇒ f
@@ -302,7 +315,10 @@ class AtomicCircuitBreakerLogic(maxFailures:              Int,
       if (nextResetTimeout < maxResetTimeout)
         swapResetTimeout(currentResetTimeout, nextResetTimeout)
 
-      f(currentResetTimeout)
+//      f(currentResetTimeout)
+      scheduler.scheduleOnce(currentResetTimeout) {
+        attemptReset()
+      }
     }
 
     /**
@@ -356,7 +372,7 @@ class AtomicCircuitBreakerLogic(maxFailures:              Int,
       *
       * @return
       */
-    override def callFails(f: (FiniteDuration => Unit)): Unit = ()
+    override def callFails(): Unit = ()
 
     /**
       * On entering this state, schedule an attempted reset via [[akka.actor.Scheduler]] and store the entry time to
