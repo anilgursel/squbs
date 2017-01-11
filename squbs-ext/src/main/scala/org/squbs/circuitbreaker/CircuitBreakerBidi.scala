@@ -18,10 +18,8 @@ package org.squbs.circuitbreaker
 
 import akka.stream.stage._
 import akka.stream._
-import org.squbs.circuitbreaker.impl.AtomicCircuitBreakerLogic
 
 import scala.collection.mutable
-import scala.concurrent.duration._
 import scala.util.{Failure, Success, Try}
 
 /**
@@ -43,7 +41,7 @@ import scala.util.{Failure, Success, Try}
   * failure.
   *
   * By default, the circuit breaker functionality is per materialization meaning that it takes into account failures
-  * and successes only from a single materialization.  But, it also accepts a [[circuitBreaker]] that can be shared
+  * and successes only from a single materialization.  But, it also accepts a [[circuitBreakerState]] that can be shared
   * across multiple streams as well as multiple materializations of the same stream.
   *
   * Please note, if the upstream does not control the throughput, then [[CircuitBreakerBidi]] might cause more elements
@@ -51,9 +49,9 @@ import scala.util.{Failure, Success, Try}
   * most likely takes less time than it takes the wrapped flow to process an element.  To eliminate this problem, a
   * throttle can be applied specifically for circuit breaker related messages.
   *
-  * @param circuitBreaker Circuit Breaker implementation
+  * @param circuitBreakerState Circuit Breaker implementation
   */
-class CircuitBreakerBidi[In, Out, Context, Id](circuitBreaker: CircuitBreakerLogic)
+class CircuitBreakerBidi[In, Out, Context, Id](circuitBreakerState: CircuitBreakerState)
   extends GraphStage[BidiShape[(In, Context), (In, Context), (Try[Out], Context), (Try[Out], Context)]] {
   val in = Inlet[(In, Context)]("CircuitBreakerBidi.in")
   val fromWrapped = Inlet[(Try[Out], Context)]("CircuitBreakerBidi.fromWrapped")
@@ -65,17 +63,6 @@ class CircuitBreakerBidi[In, Out, Context, Id](circuitBreaker: CircuitBreakerLog
   val readyToPush = mutable.Queue[(Try[Out], Context)]()
   private[this] def timerName = "CircuitBreakerBidi"
 
-//  def this(maxFailures: Int,
-//           callTimeout: FiniteDuration,
-//           resetTimeout: FiniteDuration,
-//           maxResetTimeout: FiniteDuration,
-//           exponentialBackoffFactor: Double) =
-//    this(new AtomicCircuitBreakerLogic(maxFailures, callTimeout, resetTimeout, maxResetTimeout, exponentialBackoffFactor))
-//// TODO This should not access to Atomic
-//  def this(maxFailures: Int,
-//           callTimeout: FiniteDuration,
-//           resetTimeout: FiniteDuration) = this(maxFailures, callTimeout, resetTimeout, 36500.days, 1.0)
-
   def onPushFromWrapped(elem: (Try[Out], Context), isOutAvailable: Boolean): Option[(Try[Out], Context)] = {
     readyToPush.enqueue(elem)
     if(isOutAvailable) Some(readyToPush.dequeue())
@@ -84,13 +71,13 @@ class CircuitBreakerBidi[In, Out, Context, Id](circuitBreaker: CircuitBreakerLog
 
   override def initialAttributes = Attributes.name("CircuitBreakerBidi")
 
-  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new TimerGraphStageLogic(shape) {
+  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
     setHandler(in, new InHandler {
       override def onPush(): Unit = {
         val (elem, context) = grab(in)
         print(s"---> onPushIn elem: ${elem.toString}  ")
-        if(circuitBreaker.shortCircuit()) {
+        if(circuitBreakerState.isShortCircuited) {
           print(s"short circuit: YES ")
           if(isAvailable(out) && readyToPush.isEmpty){
             println("push(out, Failure(CircuitBreakerOpenException()))")
@@ -125,12 +112,12 @@ class CircuitBreakerBidi[In, Out, Context, Id](circuitBreaker: CircuitBreakerLog
         elem match {
             // TODO add metrics code here
           case Success(_) =>
-            circuitBreaker.succeed()
+            circuitBreakerState.succeed()
             print(s"${elem.toString}  ")
           case Failure(_) =>
             print("TimeoutException  ")
 
-            circuitBreaker.fail()
+            circuitBreakerState.fail()
         }
         onPushFromWrapped((elem, context), isAvailable(out)) foreach { tuple =>
           push(out, tuple)
@@ -173,17 +160,6 @@ class CircuitBreakerBidi[In, Out, Context, Id](circuitBreaker: CircuitBreakerLog
       }
       override def onDownstreamFinish(): Unit = cancel(fromWrapped)
     })
-
-    override def onTimer(timerKey: Any): Unit = {
-//      circuitBreaker.attemptReset()
-//      if(!hasBeenPulled(in) && isAvailable(toWrapped)) pull(in)
-    }
-
-    // TODO This could actually be moved to CircuitBreaker; however, then we need to make sure we do not schedule
-    // a timer if already one scheduled.  It is a scenario that should not happen though.
-    // The other thing to consider is which thread the scheduled task would run.  Doing this way ensure `onTimer` being
-    // called in the same thread.
-//    private def scheduleResetAttempt(d: FiniteDuration): Unit = if(!isTimerActive(timerName)) scheduleOnce(timerName, d)
   }
 
   override def toString = "CircuitBreakerBidi"

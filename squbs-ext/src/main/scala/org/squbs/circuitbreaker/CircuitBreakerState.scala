@@ -37,9 +37,8 @@ import scala.concurrent.duration._
   * An [[ActorRef]] can be subscribed to receive certain events, e.g., [[TransitionEvents]] to receive all transition
   * events or specific transtion events like [[Open]].  Going forward more CircuitBreaker events could be introduced.
   */
-trait CircuitBreakerLogic {
+trait CircuitBreakerState {
 
-  // TODO Consider making this overridable
   private val eventBus = new CircuitBreakerEventBusImpl
 
   /**
@@ -49,7 +48,7 @@ trait CircuitBreakerLogic {
     * @param to event types that this [[ActorRef]] is interested in.
     * @return
     */
-  def subscribe(subscriber: ActorRef, to: CircuitBreakerEventType): Boolean = {
+  def subscribe(subscriber: ActorRef, to: EventType): Boolean = {
     eventBus.subscribe(subscriber, to)
   }
 
@@ -59,23 +58,22 @@ trait CircuitBreakerLogic {
     *
     * @param maxResetTimeout the upper bound of resetTimeout
     */
-  def withExponentialBackoff(maxResetTimeout: FiniteDuration): CircuitBreakerLogic
+  def withExponentialBackoff(maxResetTimeout: FiniteDuration): CircuitBreakerState
 
   /**
-    * Mark a successful call through CircuitBreaker. Sometimes the callee of CircuitBreaker sends back a message to the
-    * caller Actor. In such a case, it is convenient to mark a successful call instead of using Future
-    * via [[withCircuitBreaker]]
+    * Mark a successful call through CircuitBreaker.
     */
   def succeed(): Unit
 
   /**
-    * Mark a failed call through CircuitBreaker. Sometimes the callee of CircuitBreaker sends back a message to the
-    * caller Actor. In such a case, it is convenient to mark a failed call instead of using Future
-    * via [[withCircuitBreaker]]
+    * Mark a failed call through CircuitBreaker.
     */
   def fail(): Unit
 
-  def shortCircuit(): Boolean
+  /**
+    * Check if circuit should be short circuited.
+    */
+  def isShortCircuited: Boolean
 
   /**
     * Implements consistent transition between states. Throws IllegalStateException if an invalid transition is attempted.
@@ -83,19 +81,19 @@ trait CircuitBreakerLogic {
     * @param fromState State being transitioning from
     * @param toState   State being transitioning from
     */
-  protected final def transition(fromState: CircuitBreakerState, toState: CircuitBreakerState): Unit = {
+  protected final def transition(fromState: State, toState: State): Unit = {
     if(transitionImpl(fromState, toState))
       eventBus.publish(CircuitBreakerEvent(toState, toState))
   }
 
-  protected def transitionImpl(fromState: CircuitBreakerState, toState: CircuitBreakerState): Boolean
+  protected def transitionImpl(fromState: State, toState: State): Boolean
 
   /**
     * Trips breaker to an open state.  This is valid from Closed or Half-Open states.
     *
     * @param fromState State we're coming from (Closed or Half-Open)
     */
-  protected final def tripBreaker(fromState: CircuitBreakerState): Unit = transition(fromState, Open)
+  protected final def tripBreaker(fromState: State): Unit = transition(fromState, Open)
 
   /**
     * Resets breaker to a closed state.  This is valid from an Half-Open state only.
@@ -105,30 +103,30 @@ trait CircuitBreakerLogic {
 
   /**
     * Attempts to reset breaker by transitioning to a half-open state.  This is valid from an Open state only.
-    * // TODO Consider making this protected as well
+    *
     */
-  final def attemptReset(): Unit = transition(Open, HalfOpen)
+  protected final def attemptReset(): Unit = transition(Open, HalfOpen)
 
 }
 
 
 import akka.util.Subclassification
 
-sealed trait CircuitBreakerEventType
-sealed trait TransitionEvent extends CircuitBreakerEventType
+sealed trait EventType
+sealed trait TransitionEvent extends EventType
 object TransitionEvents extends TransitionEvent
-sealed trait CircuitBreakerState extends TransitionEvent
-object Closed extends CircuitBreakerState
-object HalfOpen extends CircuitBreakerState
-object Open extends CircuitBreakerState
+sealed trait State extends TransitionEvent
+object Closed extends State
+object HalfOpen extends State
+object Open extends State
 
-case class CircuitBreakerEvent(eventType: CircuitBreakerEventType, payload: Any)
+case class CircuitBreakerEvent(eventType: EventType, payload: Any)
 
-class CircuitBreakerEventClassification extends Subclassification[CircuitBreakerEventType] {
-  override def isEqual(x: CircuitBreakerEventType, y: CircuitBreakerEventType): Boolean =
+class CircuitBreakerEventClassification extends Subclassification[EventType] {
+  override def isEqual(x: EventType, y: EventType): Boolean =
     x == y
 
-  override def isSubclass(x: CircuitBreakerEventType, y: CircuitBreakerEventType): Boolean =
+  override def isSubclass(x: EventType, y: EventType): Boolean =
     x match {
       case `y` => true
       case _ if x.isInstanceOf[TransitionEvent] && y == TransitionEvents => true
@@ -139,12 +137,12 @@ class CircuitBreakerEventClassification extends Subclassification[CircuitBreaker
 import akka.event.SubchannelClassification
 
 /**
-  * Publishes the payload of the CircuitBreakerEvent when the event type of the
-  * CircuitBreakerEvent matches with the one used during subscription
+  * Publishes the payload of the [[CircuitBreakerEvent]] when the event type of the
+  * [[CircuitBreakerEvent]] matches with the one used during subscription.
   */
 class CircuitBreakerEventBusImpl extends EventBus with SubchannelClassification {
   type Event = CircuitBreakerEvent
-  type Classifier = CircuitBreakerEventType
+  type Classifier = EventType
   type Subscriber = ActorRef
 
   override protected val subclassification: Subclassification[Classifier] =
