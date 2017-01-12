@@ -56,7 +56,7 @@ object AtomicCircuitBreakerState {
     new AtomicCircuitBreakerState(name, scheduler, maxFailures, callTimeout, resetTimeout)
 
   /**
-    * Create a new Circuit Breaker by reading the setting from the configuration for the provided name.
+    * Create a new Circuit Breaker from configuration.
     *
     * @param name The unique name of this circuit breaker instance.
     *             Used for finding the corresponding configuration and also differentiating the metrics.
@@ -100,6 +100,16 @@ object AtomicCircuitBreakerState {
              resetTimeout: FiniteDuration,
              executor: ExecutionContext): CircuitBreakerState =
     apply(name, scheduler, maxFailures, callTimeout, resetTimeout)(executor)
+
+  /**
+    * Java API: Create a new Circuit Breaker from configuration.
+    *
+    * @param name The unique name of this circuit breaker instance.
+    *             Used for finding the corresponding configuration and also differentiating the metrics.
+    * @param system ActorSystem
+    */
+  def create(name: String, system: ActorSystem): CircuitBreakerState =
+    apply(name)(system)
 }
 
 /**

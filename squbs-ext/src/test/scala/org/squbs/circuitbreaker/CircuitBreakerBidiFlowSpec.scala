@@ -25,6 +25,7 @@ import akka.stream.{ActorMaterializer, OverflowStrategy}
 import akka.stream.scaladsl.{BidiFlow, Flow, Sink, Source}
 import akka.testkit.{ImplicitSender, TestKit}
 import akka.util.Timeout
+import com.typesafe.config.{ConfigException, ConfigFactory}
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.{FlatSpecLike, Matchers}
 import org.scalatest.OptionValues._
@@ -37,7 +38,8 @@ import scala.concurrent.duration._
 import scala.language.postfixOps
 import scala.util.{Failure, Success, Try}
 
-class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidiFlowSpec"))
+class CircuitBreakerBidiFlowSpec
+  extends TestKit(ActorSystem("CircuitBreakerBidiFlowSpec", CircuitBreakerBidiFlowSpec.config))
   with FlatSpecLike with Matchers with ImplicitSender with ScalaFutures {
 
   implicit val materializer = ActorMaterializer()
@@ -85,32 +87,6 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     expectMsg(Closed)
   }
 
-  it should "increase the reset timeout exponentially after it transits to open again" in {
-    val circuitBreakerState = AtomicCircuitBreakerState(
-      "ExponentialBackoff",
-      system.scheduler, 2,
-      timeout,
-      10 milliseconds).withExponentialBackoff(2.0, 30 milliseconds)
-    circuitBreakerState.subscribe(self, HalfOpen)
-    circuitBreakerState.subscribe(self, Open)
-    val ref = flow(circuitBreakerState)
-    ref ! "a"
-    ref ! "b"
-    ref ! "b"
-
-    1 to 6 foreach { _ =>
-      expectMsg(Open)
-      expectMsg(HalfOpen)
-      ref ! "b"
-    }
-
-    ref ! "b"
-    expectMsg(Open)
-    // reset-timeout should be maxed at 20 milliseconds.  Otherwise, it would have been 320 seconds by this line.
-    // Giving it 50 milliseconds as timing characteristics may not be as precise.
-    expectMsg(50 milliseconds, HalfOpen)
-  }
-
   it should "increment failure count based on the provided function" in {
     val circuitBreakerState = AtomicCircuitBreakerState("FailureDecider", system.scheduler, 2, timeout, 10 milliseconds)
     circuitBreakerState.subscribe(self, TransitionEvents)
@@ -145,7 +121,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   }
 
   it should "respond with fail-fast exception" in {
-    val circuitBreakerState = AtomicCircuitBreakerState("FailFast", system.scheduler, 2, timeout, 10 milliseconds)
+    val circuitBreakerState = AtomicCircuitBreakerState("FailFast", system.scheduler, 2, timeout, 1 second)
     val circuitBreakerBidiFlow = BidiFlow
       .fromGraph {
         CircuitBreakerBidi[String, String, Long](circuitBreakerState)
@@ -258,6 +234,47 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     }
   }
 
+  it should "create circuit breaker from configuration" in {
+    val circuitBreakerState = AtomicCircuitBreakerState("sample-circuit-breaker")
+    circuitBreakerState.subscribe(self, TransitionEvents)
+    val ref = flow(circuitBreakerState)
+    ref ! "a"
+    ref ! "b"
+    expectMsg(Open)
+    expectMsg(HalfOpen)
+    ref ! "a"
+    expectMsg(Closed)
+  }
+
+  a [ConfigException.Missing] should be thrownBy AtomicCircuitBreakerState("notype-circuitbreaker")
+  a [ConfigException.Missing] should be thrownBy AtomicCircuitBreakerState("missing-max-failures-circuit-breaker")
+  a [ConfigException.Missing] should be thrownBy AtomicCircuitBreakerState("missing-call-timeout-circuit-breaker")
+  a [ConfigException.Missing] should be thrownBy AtomicCircuitBreakerState("missing-reset-timeout-circuit-breaker")
+
+  it should "increase the reset timeout exponentially after it transits to open again" in {
+    val circuitBreakerState = AtomicCircuitBreakerState("exponential-backoff-circuitbreaker")
+    circuitBreakerState.subscribe(self, HalfOpen)
+    circuitBreakerState.subscribe(self, Open)
+    val ref = flow(circuitBreakerState)
+    ref ! "a"
+    ref ! "b"
+    ref ! "b"
+    expectNoMsg(10 milliseconds)
+
+    1 to 6 foreach { _ =>
+      expectMsg(Open)
+      expectMsg(HalfOpen)
+      ref ! "b"
+      expectNoMsg(20 milliseconds)
+    }
+
+    ref ! "b"
+    expectMsg(Open)
+    // reset-timeout should be maxed at 20 milliseconds.  Otherwise, it would have been 320 seconds by this line.
+    // Giving it 50 milliseconds as timing characteristics may not be as precise.
+    expectMsg(50 milliseconds, HalfOpen)
+  }
+
   it should "many messages" in {
     val circuitBreakerLogic = AtomicCircuitBreakerState("ManyMessages", system.scheduler, 2, timeout, 10 milliseconds)
     circuitBreakerLogic.subscribe(self, TransitionEvents)
@@ -300,6 +317,52 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     ref ! "a"
     expectMsg(Closed)
   }
+}
+
+object CircuitBreakerBidiFlowSpec {
+  val config = ConfigFactory.parseString(
+    """
+      |sample-circuit-breaker {
+      |  type = squbs.circuitbreaker
+      |  max-failures = 1
+      |  call-timeout = 50 ms
+      |  reset-timeout = 20 ms
+      |}
+      |
+      |exponential-backoff-circuitbreaker {
+      |  type = squbs.circuitbreaker
+      |  max-failures = 2
+      |  call-timeout = 60 ms
+      |  reset-timeout = 10 ms
+      |  exponential-backoff-factor = 2.0
+      |  max-reset-timeout = 30 ms
+      |}
+      |
+      |notype-circuitbreaker {
+      |  max-failures = 1
+      |  call-timeout = 50 ms
+      |  reset-timeout = 20 ms
+      |}
+      |
+      |missing-max-failures-circuit-breaker {
+      |  type = squbs.circuitbreaker
+      |  call-timeout = 50 ms
+      |  reset-timeout = 20 ms
+      |}
+      |
+      |missing-call-timeout-circuit-breaker {
+      |  type = squbs.circuitbreaker
+      |  max-failures = 1
+      |  reset-timeout = 20 ms
+      |}
+      |
+      |missing-reset-timeout-circuit-breaker {
+      |  type = squbs.circuitbreaker
+      |  max-failures = 1
+      |  call-timeout = 50 ms
+      |}
+      |
+    """.stripMargin)
 }
 
 class DelayActor extends Actor {
