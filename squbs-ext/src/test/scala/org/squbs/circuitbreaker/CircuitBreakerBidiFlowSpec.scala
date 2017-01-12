@@ -30,7 +30,7 @@ import org.scalatest.{FlatSpecLike, Matchers}
 import org.scalatest.OptionValues._
 import org.squbs.circuitbreaker.impl.AtomicCircuitBreakerState
 import org.squbs.metrics.MetricsExtension
-import org.squbs.streams.{FlowTimeoutException, TimeoutBidiFlowUnordered}
+import org.squbs.streams.FlowTimeoutException
 
 import scala.concurrent.duration._
 import scala.language.postfixOps
@@ -48,7 +48,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
 
   def atomicCircuitBreakerState = new AtomicCircuitBreakerState("TestCB", system.scheduler, 2, timeout, 10 milliseconds)
 
-  def flow(circuitBreakerLogic: CircuitBreakerState) = {
+  def flow(circuitBreakerState: CircuitBreakerState) = {
     val delayActor = system.actorOf(Props[DelayActor])
     import akka.pattern.ask
     implicit val askTimeout = Timeout(5.seconds)
@@ -56,15 +56,9 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
       (delayActor ? elem).mapTo[(String, UUID)]
     }
 
-    val timeoutBidiFlow = TimeoutBidiFlowUnordered[String, String, UUID](timeout)
-
-
-    val circuitBreakerBidiFlow = BidiFlow.fromGraph(new CircuitBreakerBidi[String, String, UUID, UUID]
-    (circuitBreakerLogic))
-
     Flow[String]
       .map(s => (s, UUID.randomUUID()))
-      .via(circuitBreakerBidiFlow.atop(timeoutBidiFlow).join(flow))
+      .via(CircuitBreakerBidiFlow[String, String, UUID](circuitBreakerState).join(flow))
       .to(Sink.ignore)
       .runWith(Source.actorRef[String](25, OverflowStrategy.fail))
   }
@@ -100,14 +94,19 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
       case (Success("b"), _) => true
       case _ => false
     }
-    val circuitBreakerBidiFlow = BidiFlow.fromGraph {
-      new CircuitBreakerBidi[String, String, UUID, UUID](circuitBreakerState, hasFailed = failureDecider)
-    }
 
-    val flow = circuitBreakerBidiFlow.join(Flow[(String, UUID)].map { case (s, uuid) => (Success(s), uuid) })
+    val circuitBreakerBidiFlow = BidiFlow
+      .fromGraph {
+        CircuitBreakerBidi[String, String, UUID](
+          circuitBreakerState,
+          fallback = None,
+          failureDecider = Some(failureDecider))
+      }
+
+    val flow = Flow[(String, UUID)].map { case (s, uuid) => (Success(s), uuid) }
 
     val ref = Flow[String]
-      .map(s => (s, UUID.randomUUID())).via(flow)
+      .map(s => (s, UUID.randomUUID())).via(circuitBreakerBidiFlow.join(flow))
       .to(Sink.ignore)
       .runWith(Source.actorRef[String](25, OverflowStrategy.fail))
 
@@ -122,10 +121,11 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
 
   it should "respond with fail-fast exception" in {
     val circuitBreakerState = atomicCircuitBreakerState
+    val circuitBreakerBidiFlow = BidiFlow
+      .fromGraph {
+        CircuitBreakerBidi[String, String, Long](circuitBreakerState)
+      }
 
-    val circuitBreakerBidiFlow = BidiFlow.fromGraph {
-      new CircuitBreakerBidi[String, String, Long, Long](circuitBreakerState)
-    }
 
     val flowFailure = Failure(new RuntimeException("Some dummy exception!"))
     val flow = Flow[(String, Long)].map {
@@ -150,8 +150,9 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     val circuitBreakerState = atomicCircuitBreakerState
 
     val circuitBreakerBidiFlow = BidiFlow.fromGraph {
-      new CircuitBreakerBidi[String, String, Long, Long](circuitBreakerState,
-                                                        Some((elem: (String, Long)) => (Success("c"), elem._2)))
+      CircuitBreakerBidi[String, String, Long](
+        circuitBreakerState,
+        Some((elem: (String, Long)) => (Success("c"), elem._2)), None)
     }
 
     val flowFailure = Failure(new RuntimeException("Some dummy exception!"))

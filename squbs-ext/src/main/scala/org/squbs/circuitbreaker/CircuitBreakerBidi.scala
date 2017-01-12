@@ -16,8 +16,11 @@
 
 package org.squbs.circuitbreaker
 
-import akka.stream.stage._
+import akka.NotUsed
 import akka.stream._
+import akka.stream.scaladsl.BidiFlow
+import akka.stream.stage._
+import org.squbs.streams.TimeoutBidiUnordered
 
 import scala.collection.mutable
 import scala.util.{Failure, Success, Try}
@@ -51,10 +54,11 @@ import scala.util.{Failure, Success, Try}
   *
   * @param circuitBreakerState Circuit Breaker implementation
   */
-class CircuitBreakerBidi[In, Out, Context, Id](circuitBreakerState: CircuitBreakerState,
-                                               fallback: Option[((In, Context)) => (Try[Out], Context)] = None,
-                                               hasFailed: ((Try[Out], Context)) => Boolean = (e: (Try[Out], Context)) => e._1.isFailure)
+class CircuitBreakerBidi[In, Out, Context](circuitBreakerState: CircuitBreakerState,
+                                           fallback: Option[((In, Context)) => (Try[Out], Context)],
+                                           failureDecider: Option[((Try[Out], Context)) => Boolean])
   extends GraphStage[BidiShape[(In, Context), (In, Context), (Try[Out], Context), (Try[Out], Context)]] {
+
   val in = Inlet[(In, Context)]("CircuitBreakerBidi.in")
   val fromWrapped = Inlet[(Try[Out], Context)]("CircuitBreakerBidi.fromWrapped")
   val toWrapped = Outlet[(In, Context)]("CircuitBreakerBidi.toWrapped")
@@ -62,6 +66,7 @@ class CircuitBreakerBidi[In, Out, Context, Id](circuitBreakerState: CircuitBreak
   val shape = BidiShape(in, toWrapped, fromWrapped, out)
   private var upstreamFinished = false
   val readyToPush = mutable.Queue[(Try[Out], Context)]()
+  val isFailure = failureDecider.getOrElse((e: (Try[Out], Context)) => e._1.isFailure)
 
   def onPushFromWrapped(elem: (Try[Out], Context), isOutAvailable: Boolean): Option[(Try[Out], Context)] = {
     readyToPush.enqueue(elem)
@@ -95,7 +100,7 @@ class CircuitBreakerBidi[In, Out, Context, Id](circuitBreakerState: CircuitBreak
       override def onPush(): Unit = {
         val elemWithcontext = grab(fromWrapped)
 
-        if(hasFailed(elemWithcontext)) circuitBreakerState.failure()
+        if(isFailure(elemWithcontext)) circuitBreakerState.failure()
         else circuitBreakerState.success()
 
         onPushFromWrapped(elemWithcontext, isAvailable(out)).foreach(tuple => push(out, tuple))
@@ -124,6 +129,33 @@ class CircuitBreakerBidi[In, Out, Context, Id](circuitBreakerState: CircuitBreak
 
   override def toString = "CircuitBreakerBidi"
 
+}
+
+object CircuitBreakerBidi {
+
+  def apply[In, Out, Context](circuitBreakerState: CircuitBreakerState,
+            fallback: Option[((In, Context)) => (Try[Out], Context)] = None,
+            failureDecider: Option[((Try[Out], Context)) => Boolean] = None):
+  CircuitBreakerBidi[In, Out, Context] =
+    new CircuitBreakerBidi(circuitBreakerState, fallback, failureDecider)
+}
+
+object CircuitBreakerBidiFlow {
+
+  def apply[In, Out, Context](circuitBreakerState: CircuitBreakerState,
+                              fallback: Option[((In, Context)) => (Try[Out], Context)] = None,
+                              failureDecider: Option[((Try[Out], Context)) => Boolean] = None):
+  BidiFlow[(In, Context), (In, Context), (Out, Context), (Try[Out], Context), NotUsed] =
+    apply(circuitBreakerState, fallback, failureDecider, (context: Context) => context)
+
+  def apply[In, Out, Context, Id](circuitBreakerState: CircuitBreakerState,
+                                  fallback: Option[((In, Context)) => (Try[Out], Context)],
+                                  failureDecider: Option[((Try[Out], Context)) => Boolean],
+                                  uniqueId: Context => Id):
+  BidiFlow[(In, Context), (In, Context), (Out, Context), (Try[Out], Context), NotUsed] =
+    BidiFlow
+      .fromGraph(CircuitBreakerBidi(circuitBreakerState, fallback, failureDecider))
+      .atop(TimeoutBidiUnordered(circuitBreakerState.callTimeout, uniqueId))
 }
 
 case class CircuitBreakerOpenException(msg: String = "Circuit Breaker is open!") extends Exception(msg)

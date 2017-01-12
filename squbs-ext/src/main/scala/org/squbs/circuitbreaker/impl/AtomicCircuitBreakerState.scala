@@ -85,10 +85,10 @@ object AtomicCircuitBreakerState {
   * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
   * @param executor [[scala.concurrent.ExecutionContext]] used for execution of state transition listeners
   */
-class AtomicCircuitBreakerState(val name:       String,
+class AtomicCircuitBreakerState(val name:                 String,
                                 scheduler:                Scheduler,
                                 maxFailures:              Int,
-                                callTimeout:              FiniteDuration,
+                                val callTimeout:              FiniteDuration,
                                 resetTimeout:             FiniteDuration,
                                 maxResetTimeout:          FiniteDuration,
                                 exponentialBackoffFactor: Double,

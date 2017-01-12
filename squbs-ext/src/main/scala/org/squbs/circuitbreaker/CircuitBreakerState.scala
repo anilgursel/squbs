@@ -42,6 +42,7 @@ trait CircuitBreakerState {
 
   private val eventBus = new CircuitBreakerEventBusImpl
 
+  val callTimeout: FiniteDuration
   val metricRegistry: Option[MetricRegistry]
   val name: String
   private val metrics = metricRegistry.getOrElse(new MetricRegistry)
