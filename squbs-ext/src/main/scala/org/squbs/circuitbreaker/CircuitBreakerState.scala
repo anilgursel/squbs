@@ -73,9 +73,10 @@ trait CircuitBreakerState {
     * The `resetTimeout` will be increased exponentially for each failed attempt to close the circuit.
     * The default exponential backoff factor is 2.
     *
+    * @param exponentialBackoffFactor The exponential amount that the wait time will be increased
     * @param maxResetTimeout the upper bound of resetTimeout
     */
-  def withExponentialBackoff(maxResetTimeout: FiniteDuration): CircuitBreakerState
+  def withExponentialBackoff(exponentialBackoffFactor: Double, maxResetTimeout: FiniteDuration): CircuitBreakerState
 
   /**
     * The provided [[MetricRegistry]] will be used to register metrics

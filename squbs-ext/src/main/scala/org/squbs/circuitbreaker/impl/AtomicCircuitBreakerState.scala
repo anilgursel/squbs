@@ -21,10 +21,11 @@ package org.squbs.circuitbreaker.impl
 
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicLong}
 
-import akka.actor.Scheduler
+import akka.actor.{ActorSystem, Scheduler}
 import akka.util.Unsafe
 import com.codahale.metrics.MetricRegistry
 import org.squbs.circuitbreaker._
+import org.squbs.metrics.MetricsExtension
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
@@ -53,6 +54,33 @@ object AtomicCircuitBreakerState {
             resetTimeout: FiniteDuration)
            (implicit executor: ExecutionContext): CircuitBreakerState =
     new AtomicCircuitBreakerState(name, scheduler, maxFailures, callTimeout, resetTimeout)
+
+  /**
+    * Create a new Circuit Breaker by reading the setting from the configuration for the provided name.
+    *
+    * @param name The unique name of this circuit breaker instance.
+    *             Used for finding the corresponding configuration and also differentiating the metrics.
+    * @param system ActorSystem
+    */
+  def apply(name: String)(implicit system: ActorSystem): CircuitBreakerState = {
+    val circuitBreakerConfig = system.settings.config.getConfig(name)
+    require(circuitBreakerConfig.getString("type") == "squbs.circuitbreaker")
+
+    val circuitBreakerState =
+      apply(name,
+        system.scheduler,
+        circuitBreakerConfig.getInt("max-failures"),
+        Duration(circuitBreakerConfig.getString("call-timeout")).asInstanceOf[FiniteDuration],
+        Duration(circuitBreakerConfig.getString("reset-timeout")).asInstanceOf[FiniteDuration]
+      )(system.dispatcher)
+        .withMetricRegistry(MetricsExtension(system).metrics)
+
+    if(circuitBreakerConfig.hasPath("exponential-backoff-factor") && circuitBreakerConfig.hasPath("max-reset-timeout"))
+      circuitBreakerState.withExponentialBackoff(
+        circuitBreakerConfig.getDouble("exponential-backoff-factor"),
+        Duration(circuitBreakerConfig.getString("max-reset-timeout")).asInstanceOf[FiniteDuration])
+    else circuitBreakerState
+  }
 
   /**
     * Java API: Create a new CircuitBreaker.
@@ -122,7 +150,8 @@ class AtomicCircuitBreakerState(val name:                 String,
     *
     * @param maxResetTimeout the upper bound of resetTimeout
     */
-  def withExponentialBackoff(maxResetTimeout: FiniteDuration): AtomicCircuitBreakerState = {
+  def withExponentialBackoff(exponentialBackoffFactor: Double, maxResetTimeout: FiniteDuration):
+  AtomicCircuitBreakerState =
     new AtomicCircuitBreakerState(
       name,
       scheduler,
@@ -130,9 +159,8 @@ class AtomicCircuitBreakerState(val name:                 String,
       callTimeout,
       resetTimeout,
       maxResetTimeout,
-      2.0,
+      exponentialBackoffFactor,
       metricRegistry)(executor)
-  }
 
   def withMetricRegistry(metricRegistry: MetricRegistry): AtomicCircuitBreakerState = {
     new AtomicCircuitBreakerState(

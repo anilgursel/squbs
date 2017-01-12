@@ -90,7 +90,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
       "ExponentialBackoff",
       system.scheduler, 2,
       timeout,
-      10 milliseconds).withExponentialBackoff(30 milliseconds)
+      10 milliseconds).withExponentialBackoff(2.0, 30 milliseconds)
     circuitBreakerState.subscribe(self, HalfOpen)
     circuitBreakerState.subscribe(self, Open)
     val ref = flow(circuitBreakerState)
