@@ -87,6 +87,45 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     expectMsg(Closed)
   }
 
+  it should "increase the reset timeout exponentially after it transits to open again" in {
+    val circuitBreakerState = atomicCircuitBreakerState.withExponentialBackoff(30 milliseconds)
+    circuitBreakerState.subscribe(self, HalfOpen)
+    circuitBreakerState.subscribe(self, Open)
+    val ref = flow(circuitBreakerState)
+    ref ! "a"
+    ref ! "b"
+    ref ! "b"
+    expectMsg(Open)
+    expectNoMsg(10 milliseconds)
+    expectMsg(HalfOpen)
+    ref ! "b"
+    expectMsg(Open)
+    expectNoMsg(20 milliseconds)
+    expectMsg(HalfOpen)
+    ref ! "b"
+    expectMsg(Open)
+    expectNoMsg(20 milliseconds)
+    expectMsg(HalfOpen)
+    ref ! "b"
+    expectMsg(Open)
+    expectNoMsg(20 milliseconds)
+    expectMsg(HalfOpen)
+    ref ! "b"
+    expectMsg(Open)
+    expectNoMsg(20 milliseconds)
+    expectMsg(HalfOpen)
+    ref ! "b"
+    expectMsg(Open)
+    expectNoMsg(20 milliseconds)
+    expectMsg(HalfOpen)
+    ref ! "b"
+    expectMsg(Open)
+    expectNoMsg(20 milliseconds)
+    // reset-timeout should be maxed at 20 milliseconds.  Otherwise, it would have been 320 seconds by this line
+    // Giving it 20 + 30 milliseconds as timing characteristics may not be as precise.
+    expectMsg(30 milliseconds, HalfOpen)
+  }
+
   it should "increment failure count based on the provided function" in {
     val circuitBreakerState = atomicCircuitBreakerState
     circuitBreakerState.subscribe(self, TransitionEvents)
@@ -240,7 +279,6 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     whenReady(result, timeout(Span(2, Seconds)), interval(Span(200, Millis))) { r =>
       r should contain theSameElementsAs(expected)
     }
-
   }
 
   it should "many messages" in {
@@ -296,6 +334,9 @@ class DelayActor extends Actor {
       import context.dispatcher
       context.system.scheduler.scheduleOnce(delay(element), sender(), element)
     case element: (String, Long) =>
+      import context.dispatcher
+      context.system.scheduler.scheduleOnce(delay(element._1), sender(), element)
+    case element: (String, UUID) =>
       import context.dispatcher
       context.system.scheduler.scheduleOnce(delay(element._1), sender(), element)
   }

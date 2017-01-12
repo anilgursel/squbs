@@ -186,6 +186,8 @@ class DelayActor extends Actor {
       context.system.scheduler.scheduleOnce(delay(element), sender(), element)
     case element: (String, Long) =>
       context.system.scheduler.scheduleOnce(delay(element._1), sender(), element)
+    case element: (String, UUID) =>
+      context.system.scheduler.scheduleOnce(delay(element._1), sender(), element)
     case element: akka.japi.Pair[String, Long] =>
       context.system.scheduler.scheduleOnce(delay(element.first), sender(), element)
   }

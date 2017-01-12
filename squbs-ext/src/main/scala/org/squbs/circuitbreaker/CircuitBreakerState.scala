@@ -17,7 +17,8 @@
 package org.squbs.circuitbreaker
 
 import akka.actor.ActorRef
-import akka.event.EventBus
+import akka.event.{EventBus, SubchannelClassification}
+import akka.util.Subclassification
 import com.codahale.metrics.{Gauge, MetricRegistry}
 
 import scala.concurrent.duration._
@@ -78,7 +79,7 @@ trait CircuitBreakerState {
   /**
     * Mark a successful element through CircuitBreaker.
     */
-  def success(): Unit = {
+  final def success(): Unit = {
     metrics.meter(SuccessCount).mark()
     succeeds()
   }
@@ -86,7 +87,7 @@ trait CircuitBreakerState {
   /**
     * Mark a failed element through CircuitBreaker.
     */
-  def failure(): Unit = {
+  final def failure(): Unit = {
     metrics.meter(FailureCount).mark()
     fails()
   }
@@ -94,7 +95,7 @@ trait CircuitBreakerState {
   /**
     * Check if circuit should be short circuited.
     */
-  def shortCircuited(): Boolean = {
+  final def shortCircuited(): Boolean = {
     val shortCircuited = isShortCircuited
     if(shortCircuited) metrics.meter(ShortCircuitCount).mark()
     shortCircuited
@@ -114,15 +115,8 @@ trait CircuitBreakerState {
     * @param fromState State being transitioning from
     * @param toState   State being transitioning from
     */
-  protected final def transition(fromState: State, toState: State): Unit = {
-    if(transitionImpl(fromState, toState))
-      eventBus.publish(CircuitBreakerEvent(toState, toState))
-
-    // TODO add metrics code in fail and succeed..
-    // Also, make the current state a Gauge so that it automatically gets exposed
-    // as JMX.  So, the current state gauge should be set here.
-    // Also, CircuitBreakerState should have a name function for metrics.
-  }
+  protected final def transition(fromState: State, toState: State): Unit =
+    if(transitionImpl(fromState, toState)) eventBus.publish(CircuitBreakerEvent(toState, toState))
 
   protected def transitionImpl(fromState: State, toState: State): Boolean
 
@@ -147,8 +141,7 @@ trait CircuitBreakerState {
 
 }
 
-
-import akka.util.Subclassification
+case class CircuitBreakerOpenException(msg: String = "Circuit Breaker is open!") extends Exception(msg)
 
 sealed trait EventType
 sealed trait TransitionEvent extends EventType
@@ -171,8 +164,6 @@ class CircuitBreakerEventClassification extends Subclassification[EventType] {
       case _ => false
     }
 }
-
-import akka.event.SubchannelClassification
 
 /**
   * Publishes the payload of the [[CircuitBreakerEvent]] when the event type of the

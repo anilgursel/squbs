@@ -88,11 +88,11 @@ object AtomicCircuitBreakerState {
 class AtomicCircuitBreakerState(val name:                 String,
                                 scheduler:                Scheduler,
                                 maxFailures:              Int,
-                                val callTimeout:              FiniteDuration,
+                                val callTimeout:          FiniteDuration,
                                 resetTimeout:             FiniteDuration,
                                 maxResetTimeout:          FiniteDuration,
                                 exponentialBackoffFactor: Double,
-                                val metricRegistry: Option[MetricRegistry])
+                                val metricRegistry:       Option[MetricRegistry])
                                (implicit executor: ExecutionContext)
   extends AbstractAtomicCircuitBreakerLogic with CircuitBreakerState {
 
@@ -340,18 +340,6 @@ class AtomicCircuitBreakerState(val name:                 String,
     override def isShortCircuited: Boolean = true
 
     /**
-      * Calculate remaining duration until reset to inform the caller in case a backoff algorithm is useful
-      *
-      * @return duration to when the breaker will attempt a reset by transitioning to half-open
-      */
-    private def remainingDuration(): FiniteDuration = {
-      val fromOpened = System.nanoTime() - get
-      val diff = currentResetTimeout.toNanos - fromOpened
-      if (diff <= 0L) Duration.Zero
-      else diff.nanos
-    }
-
-    /**
       * No-op for open, calls are never executed so cannot succeed or fail
       *
       * @return
@@ -366,8 +354,7 @@ class AtomicCircuitBreakerState(val name:                 String,
     override def fails(): Unit = ()
 
     /**
-      * On entering this state, schedule an attempted reset via [[akka.actor.Scheduler]] and store the entry time to
-      * calculate remaining time before attempted reset.
+      * On entering this state, schedule an attempted reset via [[akka.actor.Scheduler]] and store the entry time.
       *
       * @return
       */

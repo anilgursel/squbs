@@ -157,5 +157,3 @@ object CircuitBreakerBidiFlow {
       .fromGraph(CircuitBreakerBidi(circuitBreakerState, fallback, failureDecider))
       .atop(TimeoutBidiUnordered(circuitBreakerState.callTimeout, uniqueId))
 }
-
-case class CircuitBreakerOpenException(msg: String = "Circuit Breaker is open!") extends Exception(msg)
