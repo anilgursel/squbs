@@ -47,8 +47,6 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   val timeoutFailure = Failure(FlowTimeoutException("Flow timed out!"))
   val circuitBreakerOpenFailure = Failure(CircuitBreakerOpenException("Circuit Breaker is open!"))
 
-  def atomicCircuitBreakerState = new AtomicCircuitBreakerState("TestCB", system.scheduler, 2, timeout, 10 milliseconds)
-
   def flow(circuitBreakerState: CircuitBreakerState) = {
     val delayActor = system.actorOf(Props[DelayActor])
     import akka.pattern.ask
@@ -65,7 +63,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   }
 
   it should "increment failure count on call timeout" in {
-    val circuitBreakerState = atomicCircuitBreakerState
+    val circuitBreakerState = AtomicCircuitBreakerState("IncFailCount", system.scheduler, 2, timeout, 10 milliseconds)
     circuitBreakerState.subscribe(self, Open)
     val ref = flow(circuitBreakerState)
     ref ! "a"
@@ -75,7 +73,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   }
 
   it should "reset failure count after success" in {
-    val circuitBreakerState = atomicCircuitBreakerState
+    val circuitBreakerState = AtomicCircuitBreakerState("ResetFailCount", system.scheduler, 2, timeout, 10 milliseconds)
     circuitBreakerState.subscribe(self, TransitionEvents)
     val ref = flow(circuitBreakerState)
     ref ! "a"
@@ -88,46 +86,33 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   }
 
   it should "increase the reset timeout exponentially after it transits to open again" in {
-    val circuitBreakerState = atomicCircuitBreakerState.withExponentialBackoff(30 milliseconds)
+    val circuitBreakerState = AtomicCircuitBreakerState(
+      "ExponentialBackoff",
+      system.scheduler, 2,
+      timeout,
+      10 milliseconds).withExponentialBackoff(30 milliseconds)
     circuitBreakerState.subscribe(self, HalfOpen)
     circuitBreakerState.subscribe(self, Open)
     val ref = flow(circuitBreakerState)
     ref ! "a"
     ref ! "b"
     ref ! "b"
-    expectMsg(Open)
-    expectNoMsg(10 milliseconds)
-    expectMsg(HalfOpen)
+
+    1 to 6 foreach { _ =>
+      expectMsg(Open)
+      expectMsg(HalfOpen)
+      ref ! "b"
+    }
+
     ref ! "b"
     expectMsg(Open)
-    expectNoMsg(20 milliseconds)
-    expectMsg(HalfOpen)
-    ref ! "b"
-    expectMsg(Open)
-    expectNoMsg(20 milliseconds)
-    expectMsg(HalfOpen)
-    ref ! "b"
-    expectMsg(Open)
-    expectNoMsg(20 milliseconds)
-    expectMsg(HalfOpen)
-    ref ! "b"
-    expectMsg(Open)
-    expectNoMsg(20 milliseconds)
-    expectMsg(HalfOpen)
-    ref ! "b"
-    expectMsg(Open)
-    expectNoMsg(20 milliseconds)
-    expectMsg(HalfOpen)
-    ref ! "b"
-    expectMsg(Open)
-    expectNoMsg(20 milliseconds)
-    // reset-timeout should be maxed at 20 milliseconds.  Otherwise, it would have been 320 seconds by this line
-    // Giving it 20 + 30 milliseconds as timing characteristics may not be as precise.
-    expectMsg(30 milliseconds, HalfOpen)
+    // reset-timeout should be maxed at 20 milliseconds.  Otherwise, it would have been 320 seconds by this line.
+    // Giving it 50 milliseconds as timing characteristics may not be as precise.
+    expectMsg(50 milliseconds, HalfOpen)
   }
 
   it should "increment failure count based on the provided function" in {
-    val circuitBreakerState = atomicCircuitBreakerState
+    val circuitBreakerState = AtomicCircuitBreakerState("FailureDecider", system.scheduler, 2, timeout, 10 milliseconds)
     circuitBreakerState.subscribe(self, TransitionEvents)
 
     def failureDecider(elem: (Try[String], UUID)): Boolean = elem match {
@@ -160,7 +145,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   }
 
   it should "respond with fail-fast exception" in {
-    val circuitBreakerState = atomicCircuitBreakerState
+    val circuitBreakerState = AtomicCircuitBreakerState("FailFast", system.scheduler, 2, timeout, 10 milliseconds)
     val circuitBreakerBidiFlow = BidiFlow
       .fromGraph {
         CircuitBreakerBidi[String, String, Long](circuitBreakerState)
@@ -187,7 +172,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   }
 
   it should "respond with fallback" in {
-    val circuitBreakerState = atomicCircuitBreakerState
+    val circuitBreakerState = AtomicCircuitBreakerState("Fallback", system.scheduler, 2, timeout, 10 milliseconds)
 
     val circuitBreakerBidiFlow = BidiFlow.fromGraph {
       CircuitBreakerBidi[String, String, Long](
@@ -220,16 +205,8 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
       Option(ManagementFactory.getPlatformMBeanServer.getAttribute(oName, key))
     }
 
-    val circuitBreakerState =
-      new AtomicCircuitBreakerState(
-        "MetricsCB",
-        system.scheduler,
-        2,
-        timeout,
-        10 seconds,
-        10 seconds,
-        1.0,
-        Some(MetricsExtension(system).metrics))
+    val circuitBreakerState = AtomicCircuitBreakerState("MetricsCB", system.scheduler, 2, timeout, 10 seconds)
+      .withMetricRegistry(MetricsExtension(system).metrics)
 
     circuitBreakerState.subscribe(self, TransitionEvents)
     val ref = flow(circuitBreakerState)
@@ -257,7 +234,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     }
 
     val circuitBreakerBidiFlow = CircuitBreakerBidiFlow[String, String, MyContext, Long](
-      atomicCircuitBreakerState,
+      AtomicCircuitBreakerState("UniqueId", system.scheduler, 2, timeout, 10 milliseconds),
       None,
       None,
       (mc: MyContext) => mc.id)
@@ -282,7 +259,7 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
   }
 
   it should "many messages" in {
-    val circuitBreakerLogic = atomicCircuitBreakerState
+    val circuitBreakerLogic = AtomicCircuitBreakerState("ManyMessages", system.scheduler, 2, timeout, 10 milliseconds)
     circuitBreakerLogic.subscribe(self, TransitionEvents)
     val ref = flow(circuitBreakerLogic)
     ref ! "a"

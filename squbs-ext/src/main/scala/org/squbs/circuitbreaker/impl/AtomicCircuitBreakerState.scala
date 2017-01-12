@@ -46,9 +46,14 @@ object AtomicCircuitBreakerState {
     * @param callTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to consider a call a failure
     * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
     */
-  def apply(scheduler: Scheduler, maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration)
+  def apply(name: String,
+            scheduler: Scheduler,
+            maxFailures: Int,
+            callTimeout: FiniteDuration,
+            resetTimeout: FiniteDuration)
            (implicit executor: ExecutionContext): CircuitBreakerState =
-    new AtomicCircuitBreakerState("", scheduler, maxFailures, callTimeout, resetTimeout)
+    new AtomicCircuitBreakerState(name, scheduler, maxFailures, callTimeout, resetTimeout)
+
   /**
     * Java API: Create a new CircuitBreaker.
     *
@@ -60,9 +65,13 @@ object AtomicCircuitBreakerState {
     * @param callTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to consider a call a failure
     * @param resetTimeout [[scala.concurrent.duration.FiniteDuration]] of time after which to attempt to close the circuit
     */
-  def create(scheduler: Scheduler, maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration,
+  def create(name: String,
+             scheduler: Scheduler,
+             maxFailures: Int,
+             callTimeout: FiniteDuration,
+             resetTimeout: FiniteDuration,
              executor: ExecutionContext): CircuitBreakerState =
-    apply(scheduler, maxFailures, callTimeout, resetTimeout)(executor)
+    apply(name, scheduler, maxFailures, callTimeout, resetTimeout)(executor)
 }
 
 /**
@@ -92,15 +101,19 @@ class AtomicCircuitBreakerState(val name:                 String,
                                 resetTimeout:             FiniteDuration,
                                 maxResetTimeout:          FiniteDuration,
                                 exponentialBackoffFactor: Double,
-                                val metricRegistry:       Option[MetricRegistry])
+                                val metricRegistry:       MetricRegistry)
                                (implicit executor: ExecutionContext)
   extends AbstractAtomicCircuitBreakerLogic with CircuitBreakerState {
 
   require(exponentialBackoffFactor >= 1.0, "factor must be >= 1.0")
 
-  def this(name: String, scheduler: Scheduler, maxFailures: Int, callTimeout: FiniteDuration, resetTimeout: FiniteDuration)
+  def this(name: String,
+           scheduler: Scheduler,
+           maxFailures: Int,
+           callTimeout: FiniteDuration,
+           resetTimeout: FiniteDuration)
           (implicit executor: ExecutionContext)= {
-    this(name, scheduler, maxFailures, callTimeout, resetTimeout, 36500.days, 1.0, None)
+    this(name, scheduler, maxFailures, callTimeout, resetTimeout, 36500.days, 1.0, new MetricRegistry())
   }
 
   /**
@@ -118,6 +131,18 @@ class AtomicCircuitBreakerState(val name:                 String,
       resetTimeout,
       maxResetTimeout,
       2.0,
+      metricRegistry)(executor)
+  }
+
+  def withMetricRegistry(metricRegistry: MetricRegistry): AtomicCircuitBreakerState = {
+    new AtomicCircuitBreakerState(
+      name,
+      scheduler,
+      maxFailures,
+      callTimeout,
+      resetTimeout,
+      maxResetTimeout,
+      exponentialBackoffFactor,
       metricRegistry)(executor)
   }
 

@@ -44,18 +44,19 @@ trait CircuitBreakerState {
   private val eventBus = new CircuitBreakerEventBusImpl
 
   val callTimeout: FiniteDuration
-  val metricRegistry: Option[MetricRegistry]
+  val metricRegistry: MetricRegistry
   val name: String
-  private val metrics = metricRegistry.getOrElse(new MetricRegistry)
   private val SuccessCount = s"$name.circuit-breaker.success-count"
   private val FailureCount = s"$name.circuit-breaker.failure-count"
   private val ShortCircuitCount = s"$name.circuit-breaker.short-circuit-count"
 
   object StateGauge extends Gauge[State] {
+    val MetricName = s"$name.circuit-breaker.state"
     override def getValue: State = currentState
   }
 
-  metrics.register(s"$name.circuit-breaker.state", StateGauge)
+  if(!metricRegistry.getGauges.containsKey(StateGauge.MetricName))
+    metricRegistry.register(s"$name.circuit-breaker.state", StateGauge)
 
   /**
     * Subscribe an [[ActorRef]] to receive events that it's interested in.
@@ -77,10 +78,17 @@ trait CircuitBreakerState {
   def withExponentialBackoff(maxResetTimeout: FiniteDuration): CircuitBreakerState
 
   /**
+    * The provided [[MetricRegistry]] will be used to register metrics
+    *
+    * @param metricRegistry The registry to use for codahale metrics
+    */
+  def withMetricRegistry(metricRegistry: MetricRegistry): CircuitBreakerState
+
+  /**
     * Mark a successful element through CircuitBreaker.
     */
   final def success(): Unit = {
-    metrics.meter(SuccessCount).mark()
+    metricRegistry.meter(SuccessCount).mark()
     succeeds()
   }
 
@@ -88,7 +96,7 @@ trait CircuitBreakerState {
     * Mark a failed element through CircuitBreaker.
     */
   final def failure(): Unit = {
-    metrics.meter(FailureCount).mark()
+    metricRegistry.meter(FailureCount).mark()
     fails()
   }
 
@@ -97,7 +105,7 @@ trait CircuitBreakerState {
     */
   final def shortCircuited(): Boolean = {
     val shortCircuited = isShortCircuited
-    if(shortCircuited) metrics.meter(ShortCircuitCount).mark()
+    if(shortCircuited) metricRegistry.meter(ShortCircuitCount).mark()
     shortCircuited
   }
 
