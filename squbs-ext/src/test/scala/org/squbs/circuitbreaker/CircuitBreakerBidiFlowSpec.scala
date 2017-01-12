@@ -28,6 +28,7 @@ import akka.util.Timeout
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.{FlatSpecLike, Matchers}
 import org.scalatest.OptionValues._
+import org.scalatest.time.{Millis, Seconds, Span}
 import org.squbs.circuitbreaker.impl.AtomicCircuitBreakerState
 import org.squbs.metrics.MetricsExtension
 import org.squbs.streams.FlowTimeoutException
@@ -204,6 +205,42 @@ class CircuitBreakerBidiFlowSpec extends TestKit(ActorSystem("CircuitBreakerBidi
     jmxValue("MetricsCB.circuit-breaker.failure-count", "Count").value shouldBe 2
     // The processing of message "a" may take longer.
     awaitAssert(jmxValue("MetricsCB.circuit-breaker.short-circuit-count", "Count").value shouldBe 1)
+  }
+
+  it should "allow a custom uniqueId function to be passed in" in {
+    case class MyContext(s: String, id: Long)
+
+    val delayActor = system.actorOf(Props[DelayActor])
+    import akka.pattern.ask
+    implicit val askTimeout = Timeout(5.seconds)
+    val flow = Flow[(String, MyContext)].mapAsyncUnordered(10) { elem =>
+      (delayActor ? elem).mapTo[(String, MyContext)]
+    }
+
+    val circuitBreakerBidiFlow = CircuitBreakerBidiFlow[String, String, MyContext, Long](
+      atomicCircuitBreakerState,
+      None,
+      None,
+      (mc: MyContext) => mc.id)
+
+
+    var counter = 0L
+    val result = Source("a" :: "b" :: "b" :: "a" :: Nil)
+      .map { s => counter += 1; (s, MyContext("dummy", counter)) }
+      .via(circuitBreakerBidiFlow.join(flow))
+      .runWith(Sink.seq)
+
+    val timeoutFailure = Failure(FlowTimeoutException("Flow timed out!"))
+    val expected =
+      (Success("a"), MyContext("dummy", 1)) ::
+      (Success("a"), MyContext("dummy", 4)) ::
+      (timeoutFailure, MyContext("dummy", 2)) ::
+      (timeoutFailure, MyContext("dummy", 3)) :: Nil
+
+    whenReady(result, timeout(Span(2, Seconds)), interval(Span(200, Millis))) { r =>
+      r should contain theSameElementsAs(expected)
+    }
+
   }
 
   it should "many messages" in {
