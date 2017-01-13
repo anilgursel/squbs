@@ -45,7 +45,7 @@ class CircuitBreakerBidiFlowSpec
   implicit val materializer = ActorMaterializer()
   import system.dispatcher
 
-  val timeout = 60 milliseconds
+  val timeout = 100 milliseconds
   val timeoutFailure = Failure(FlowTimeoutException("Flow timed out!"))
   val circuitBreakerOpenFailure = Failure(CircuitBreakerOpenException("Circuit Breaker is open!"))
 
@@ -289,7 +289,7 @@ object CircuitBreakerBidiFlowSpec {
       |exponential-backoff-circuitbreaker {
       |  type = squbs.circuitbreaker
       |  max-failures = 2
-      |  call-timeout = 60 ms
+      |  call-timeout = 100 ms
       |  reset-timeout = 10 ms
       |  exponential-backoff-factor = 2.0
       |  max-reset-timeout = 30 ms
@@ -324,7 +324,7 @@ object CircuitBreakerBidiFlowSpec {
 
 class DelayActor extends Actor {
 
-  val delay = Map("a" -> 30.milliseconds, "b" -> 200.milliseconds, "c" -> 30.milliseconds)
+  val delay = Map("a" -> 10.milliseconds, "b" -> 500.milliseconds, "c" -> 10.milliseconds)
 
   def receive = {
     case element: String =>

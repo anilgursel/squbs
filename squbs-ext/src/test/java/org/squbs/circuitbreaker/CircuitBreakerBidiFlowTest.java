@@ -62,7 +62,7 @@ public class CircuitBreakerBidiFlowTest {
                         "  reset-timeout = 20 ms\n" +
                         "}"));
     final Materializer mat = ActorMaterializer.create(system);
-    final FiniteDuration timeout = FiniteDuration.apply(60, TimeUnit.MILLISECONDS);
+    final FiniteDuration timeout = FiniteDuration.apply(100, TimeUnit.MILLISECONDS);
     final Try<String> timeoutFailure = Failure.apply(new FlowTimeoutException("Flow timed out!"));
 
     @Test
