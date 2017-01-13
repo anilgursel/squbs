@@ -54,8 +54,6 @@ import static akka.pattern.PatternsCS.ask;
 public class CircuitBreakerBidiFlowTest {
 
     // Reading from configuration
-    // Custom id retriever
-    // failure decider
     // Fallback
 
     final ActorSystem system = ActorSystem.create("CircuitBreakerBidiFlowTest");
@@ -95,6 +93,49 @@ public class CircuitBreakerBidiFlowTest {
             ref.tell("b", ActorRef.noSender());
             ref.tell("b", ActorRef.noSender());
             expectMsgEquals(Open.instance());
+        }};
+    }
+
+    @Test
+    public void testIncrementFailureCountBasedOnTheProvidedFunction() {
+        final ActorRef delayActor = system.actorOf(Props.create(org.squbs.streams.DelayActor.class));
+        final Flow<Pair<String, UUID>, Pair<String, UUID>, NotUsed> flow =
+                Flow.<Pair<String, UUID>>create()
+                        .mapAsyncUnordered(3, elem -> ask(delayActor, elem, 5000))
+                        .map(elem -> (Pair<String, UUID>)elem);
+
+        final CircuitBreakerState circuitBreakerState =
+                AtomicCircuitBreakerState.create(
+                        "JavaFailureDecider",
+                        system.scheduler(),
+                        2,
+                        FiniteDuration.apply(10, TimeUnit.SECONDS),
+                        FiniteDuration.apply(10, TimeUnit.MILLISECONDS),
+                        system.dispatcher());
+
+        final BidiFlow<Pair<String, UUID>, Pair<String, UUID>, Pair<String, UUID>, Pair<Try<String>, UUID>, NotUsed>
+                circuitBreakerBidiFlow = CircuitBreakerBidiFlow.create(
+                        circuitBreakerState,
+                        Optional.empty(),
+                        Optional.of(pair -> pair.first().get().equals("c")));
+
+
+        final ActorRef ref = Flow.<String>create()
+                .map(s -> Pair.create(s, UUID.randomUUID()))
+                .via(circuitBreakerBidiFlow.join(flow))
+                .to(Sink.ignore())
+                .runWith(Source.actorRef(25, OverflowStrategy.fail()), mat);
+
+
+        new JavaTestKit(system) {{
+            circuitBreakerState.subscribe(getRef(), TransitionEvents.instance());
+            ref.tell("c", ActorRef.noSender());
+            ref.tell("c", ActorRef.noSender());
+            ref.tell("c", ActorRef.noSender());
+            expectMsgEquals(Open.instance());
+            expectMsgEquals(HalfOpen.instance());
+            ref.tell("a", ActorRef.noSender());
+            expectMsgEquals(Closed.instance());
         }};
     }
 

@@ -25,10 +25,11 @@ import akka.japi.Pair
 import akka.stream._
 import akka.stream.scaladsl.BidiFlow
 import akka.stream.stage._
+import java.util.function.{Function => JFunction}
+
 import org.squbs.streams.TimeoutBidiUnordered
 
 import scala.collection.mutable
-import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success, Try}
 
 /**
@@ -166,11 +167,12 @@ object CircuitBreakerBidiFlow {
     * Java API
     */
   def create[In, Out, Context](circuitBreakerState: CircuitBreakerState,
-                               fallback: Optional[((In, Context)) => (Try[Out], Context)],
-                               failureDecider: Optional[((Try[Out], Context)) => Boolean]):
+                               fallback: Optional[JFunction[Pair[In, Context], Pair[Try[Out], Context]]],
+                               failureDecider: Optional[JFunction[Pair[Try[Out], Context], Boolean]]):
   akka.stream.javadsl.BidiFlow[Pair[In, Context], Pair[In, Context], Pair[Out, Context], Pair[Try[Out], Context], NotUsed] = {
-    import scala.compat.java8.OptionConverters._
-    JavaConverters.toJava[In, In, Out, Try[Out], Context](apply(circuitBreakerState, fallback.asScala, failureDecider.asScala))
+    JavaConverters.toJava[In, In, Out, Try[Out], Context] {
+      apply(circuitBreakerState, fallbackAsScala(fallback), failureDeciderAsScala(failureDecider))
+    }
   }
 
   def apply[In, Out, Context, Id](circuitBreakerState: CircuitBreakerState,
@@ -186,12 +188,40 @@ object CircuitBreakerBidiFlow {
     * Java API
     */
   def create[In, Out, Context, Id](circuitBreakerState: CircuitBreakerState,
-                               fallback: Optional[((In, Context)) => (Try[Out], Context)],
-                               failureDecider: Optional[((Try[Out], Context)) => Boolean],
-                               uniqueId: java.util.function.Function[Context, Id]):
+                               fallback: Optional[JFunction[Pair[In, Context], Pair[Try[Out], Context]]],
+                               failureDecider: Optional[JFunction[Pair[Try[Out], Context], Boolean]],
+                               uniqueId: JFunction[Context, Id]):
   akka.stream.javadsl.BidiFlow[Pair[In, Context], Pair[In, Context], Pair[Out, Context], Pair[Try[Out], Context], NotUsed] = {
-    import scala.compat.java8.OptionConverters._
     import scala.compat.java8.FunctionConverters._
-    JavaConverters.toJava[In, In, Out, Try[Out], Context](apply(circuitBreakerState, fallback.asScala, failureDecider.asScala, uniqueId.asScala))
+    JavaConverters.toJava[In, In, Out, Try[Out], Context] {
+      apply(circuitBreakerState, fallbackAsScala(fallback), failureDeciderAsScala(failureDecider), uniqueId.asScala)
+    }
+  }
+
+  private def fallbackAsScala[In, Out, Context](fallback: Optional[JFunction[Pair[In, Context], Pair[Try[Out], Context]]]) = {
+
+    import scala.compat.java8.FunctionConverters._
+    import scala.compat.java8.OptionConverters._
+
+    def fallbackAsScala(fallback: JFunction[Pair[In, Context], Pair[Try[Out], Context]])
+                                                      (tuple: ((In, Context))): (Try[Out], Context) = {
+      val response = fallback.asScala.apply(Pair(tuple._1, tuple._2))
+      (response.first, response.second)
+    }
+
+    fallback.asScala.map(fallbackAsScala _)
+  }
+
+  private def failureDeciderAsScala[Out, Context](failureDecider: Optional[JFunction[Pair[Try[Out], Context], Boolean]]) = {
+
+    import scala.compat.java8.FunctionConverters._
+    import scala.compat.java8.OptionConverters._
+
+    def failureDeciderAsScala(failureDecider: JFunction[Pair[Try[Out], Context], Boolean])
+                       (tuple: ((Try[Out], Context))): Boolean = {
+      failureDecider.asScala.apply(Pair(tuple._1, tuple._2))
+    }
+
+    failureDecider.asScala.map(failureDeciderAsScala _)
   }
 }

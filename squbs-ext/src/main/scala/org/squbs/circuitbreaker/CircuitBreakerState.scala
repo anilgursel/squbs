@@ -154,14 +154,21 @@ case class CircuitBreakerOpenException(msg: String = "Circuit Breaker is open!")
 
 sealed trait EventType
 sealed trait TransitionEvent extends EventType
-object TransitionEvents extends TransitionEvent
+
+object TransitionEvents extends TransitionEvent {
+  def instance = this
+}
+
 sealed trait State extends TransitionEvent
+
 object Closed extends State {
   def instance = this
 }
+
 object HalfOpen extends State {
   def instance = this
 }
+
 object Open extends State {
   def instance = this
 }
