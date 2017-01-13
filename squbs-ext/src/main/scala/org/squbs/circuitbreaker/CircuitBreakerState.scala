@@ -156,9 +156,15 @@ sealed trait EventType
 sealed trait TransitionEvent extends EventType
 object TransitionEvents extends TransitionEvent
 sealed trait State extends TransitionEvent
-object Closed extends State
-object HalfOpen extends State
-object Open extends State
+object Closed extends State {
+  def instance = this
+}
+object HalfOpen extends State {
+  def instance = this
+}
+object Open extends State {
+  def instance = this
+}
 
 case class CircuitBreakerEvent(eventType: EventType, payload: Any)
 

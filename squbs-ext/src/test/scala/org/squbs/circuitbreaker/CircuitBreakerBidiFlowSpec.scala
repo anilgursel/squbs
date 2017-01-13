@@ -274,49 +274,6 @@ class CircuitBreakerBidiFlowSpec
     // Giving it 50 milliseconds as timing characteristics may not be as precise.
     expectMsg(50 milliseconds, HalfOpen)
   }
-
-  it should "many messages" in {
-    val circuitBreakerLogic = AtomicCircuitBreakerState("ManyMessages", system.scheduler, 2, timeout, 10 milliseconds)
-    circuitBreakerLogic.subscribe(self, TransitionEvents)
-    val ref = flow(circuitBreakerLogic)
-    ref ! "a"
-    ref ! "b"
-    ref ! "b"
-    expectMsg(Open)
-    ref ! "b"
-    ref ! "b"
-    expectMsg(HalfOpen)
-    ref ! "b"
-    ref ! "b"
-    ref ! "b"
-    ref ! "b"
-    ref ! "b"
-    ref ! "b"
-    ref ! "b"
-    ref ! "b"
-    ref ! "b"
-    expectMsg(Open)
-    expectMsg(HalfOpen)
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    ref ! "a"
-    expectMsg(Closed)
-  }
 }
 
 object CircuitBreakerBidiFlowSpec {
