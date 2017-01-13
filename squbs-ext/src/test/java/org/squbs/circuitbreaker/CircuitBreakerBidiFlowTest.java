@@ -54,7 +54,6 @@ import static akka.pattern.PatternsCS.ask;
 public class CircuitBreakerBidiFlowTest {
 
     // Reading from configuration
-    // Fallback
 
     final ActorSystem system = ActorSystem.create("CircuitBreakerBidiFlowTest");
     final Materializer mat = ActorMaterializer.create(system);
@@ -137,6 +136,53 @@ public class CircuitBreakerBidiFlowTest {
             ref.tell("a", ActorRef.noSender());
             expectMsgEquals(Closed.instance());
         }};
+    }
+
+    @Test
+    public void testRespondWithFallback() throws ExecutionException, InterruptedException {
+
+        class IdGen {
+            private Integer counter = 0;
+            public Integer next() {
+                return ++counter;
+            }
+        }
+
+        final ActorRef delayActor = system.actorOf(Props.create(DelayActor.class));
+        final Flow<Pair<String, Integer>, Pair<String, Integer>, NotUsed> flow =
+                Flow.<Pair<String, Integer>>create()
+                        .mapAsyncUnordered(2, elem -> ask(delayActor, elem, 5000))
+                        .map(elem -> (Pair<String, Integer>)elem);
+
+        final CircuitBreakerState circuitBreakerState =
+                AtomicCircuitBreakerState.create(
+                        "JavaFallback",
+                        system.scheduler(),
+                        2,
+                        FiniteDuration.apply(10, TimeUnit.MILLISECONDS),
+                        FiniteDuration.apply(10, TimeUnit.SECONDS),
+                        system.dispatcher());
+
+        final BidiFlow<Pair<String, Integer>, Pair<String, Integer>, Pair<String, Integer>, Pair<Try<String>, Integer>, NotUsed> circuitBreakerBidiFlow =
+                CircuitBreakerBidiFlow.create(
+                        circuitBreakerState,
+                        Optional.of(pair -> Pair.create(Success.apply("fb"), pair.second())),
+                        Optional.empty());
+
+        IdGen idGen = new IdGen();
+        final CompletionStage<List<Pair<Try<String>, Integer>>> result =
+                Source.from(Arrays.asList("b", "b", "b", "b"))
+                        .map(s -> new Pair<>(s, idGen.next()))
+                        .via(circuitBreakerBidiFlow.join(flow))
+                        .runWith(Sink.seq(), mat);
+        final List<Pair<Try<String>, Integer>> expected =
+                Arrays.asList(
+                        Pair.create(timeoutFailure, 1),
+                        Pair.create(timeoutFailure, 2),
+                        Pair.create(Success.apply("fb"), 3),
+                        Pair.create(Success.apply("fb"), 4)
+                );
+        Assert.assertTrue(result.toCompletableFuture().get().containsAll(expected));
     }
 
     @Test

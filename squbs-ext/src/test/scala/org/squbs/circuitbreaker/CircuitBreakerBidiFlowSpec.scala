@@ -153,7 +153,7 @@ class CircuitBreakerBidiFlowSpec
     val circuitBreakerBidiFlow = BidiFlow.fromGraph {
       CircuitBreakerBidi[String, String, Long](
         circuitBreakerState,
-        Some((elem: (String, Long)) => (Success("c"), elem._2)), None)
+        Some((elem: (String, Long)) => (Success("fb"), elem._2)), None)
     }
 
     val flowFailure = Failure(new RuntimeException("Some dummy exception!"))
@@ -168,7 +168,7 @@ class CircuitBreakerBidiFlowSpec
       .via(circuitBreakerBidiFlow.join(flow))
       .runWith(Sink.seq)
 
-    val expected = (Success("a"), 1) :: (flowFailure, 2) :: (flowFailure, 3) :: (Success("c"), 4) :: Nil
+    val expected = (Success("a"), 1) :: (flowFailure, 2) :: (flowFailure, 3) :: (Success("fb"), 4) :: Nil
     whenReady(result) { r =>
       r should contain theSameElementsInOrderAs(expected)
     }
