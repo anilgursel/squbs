@@ -29,13 +29,12 @@ import akka.stream.javadsl.Flow;
 import akka.stream.javadsl.Sink;
 import akka.stream.javadsl.Source;
 import akka.testkit.JavaTestKit;
+import com.typesafe.config.ConfigFactory;
 import org.junit.Assert;
 import org.junit.Test;
 import org.squbs.circuitbreaker.impl.AtomicCircuitBreakerState;
 import org.squbs.streams.DelayActor;
 import org.squbs.streams.FlowTimeoutException;
-import org.squbs.streams.TimeoutBidiFlowOrdered;
-import org.squbs.streams.TimeoutBidiFlowUnordered;
 import scala.concurrent.duration.FiniteDuration;
 import scala.util.Failure;
 import scala.util.Success;
@@ -53,9 +52,15 @@ import static akka.pattern.PatternsCS.ask;
 
 public class CircuitBreakerBidiFlowTest {
 
-    // Reading from configuration
-
-    final ActorSystem system = ActorSystem.create("CircuitBreakerBidiFlowTest");
+    final ActorSystem system = ActorSystem.create(
+            "CircuitBreakerBidiFlowTest",
+            ConfigFactory.parseString(
+                    "sample-circuit-breaker {\n" +
+                        "  type = squbs.circuitbreaker\n" +
+                        "  max-failures = 1\n" +
+                        "  call-timeout = 50 ms\n" +
+                        "  reset-timeout = 20 ms\n" +
+                        "}"));
     final Materializer mat = ActorMaterializer.create(system);
     final FiniteDuration timeout = FiniteDuration.apply(60, TimeUnit.MILLISECONDS);
     final Try<String> timeoutFailure = Failure.apply(new FlowTimeoutException("Flow timed out!"));
@@ -92,6 +97,37 @@ public class CircuitBreakerBidiFlowTest {
             ref.tell("b", ActorRef.noSender());
             ref.tell("b", ActorRef.noSender());
             expectMsgEquals(Open.instance());
+        }};
+    }
+
+    @Test
+    public void testCreateCircuitBreakerFromConfiguration() {
+        final ActorRef delayActor = system.actorOf(Props.create(org.squbs.streams.DelayActor.class));
+        final Flow<Pair<String, UUID>, Pair<String, UUID>, NotUsed> flow =
+                Flow.<Pair<String, UUID>>create()
+                        .mapAsyncUnordered(3, elem -> ask(delayActor, elem, 5000))
+                        .map(elem -> (Pair<String, UUID>)elem);
+
+
+        final CircuitBreakerState circuitBreakerState =
+                AtomicCircuitBreakerState.create("sample-circuit-breaker", system);
+
+
+        final ActorRef ref = Flow.<String>create()
+                .map(s -> Pair.create(s, UUID.randomUUID()))
+                .via(CircuitBreakerBidiFlow.<String, String, UUID>create(circuitBreakerState).join(flow))
+                .to(Sink.ignore())
+                .runWith(Source.actorRef(25, OverflowStrategy.fail()), mat);
+
+
+        new JavaTestKit(system) {{
+            circuitBreakerState.subscribe(getRef(), TransitionEvents.instance());
+            ref.tell("a", ActorRef.noSender());
+            ref.tell("b", ActorRef.noSender());
+            expectMsgEquals(Open.instance());
+            expectMsgEquals(HalfOpen.instance());
+            ref.tell("a", ActorRef.noSender());
+            expectMsgEquals(Closed.instance());
         }};
     }
 
@@ -184,6 +220,8 @@ public class CircuitBreakerBidiFlowTest {
                 );
         Assert.assertTrue(result.toCompletableFuture().get().containsAll(expected));
     }
+
+
 
     @Test
     public void testWithCustomUniqueIdFunction() throws ExecutionException, InterruptedException {
