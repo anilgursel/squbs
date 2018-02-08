@@ -16,10 +16,9 @@
 
 package org.squbs.streams
 
-import java.util.Optional
+import java.util.{Comparator, Optional, PriorityQueue}
 import java.util.function.{Function => JFunction}
-import java.lang.{Boolean => JBoolean, Long => JLong}
-import java.util.concurrent.{DelayQueue, Delayed, TimeUnit}
+import java.lang.{Boolean => JBoolean}
 
 import akka.NotUsed
 import akka.http.org.squbs.util.JavaConverters
@@ -74,7 +73,7 @@ object RetryBidi {
     * @tparam Context the type of the context that is carried along with the elements.
     * @return a [[BidiFlow]] with Retry functionality
     */
-  def apply[In, Out, Context](maxRetries: Long, uniqueIdMapper: Context => Option[Any] = (_: Any) => None,
+  def apply[In, Out, Context](maxRetries: Int, uniqueIdMapper: Context => Option[Any] = (_: Any) => None,
                               failureDecider: Option[Try[Out] => Boolean] = None,
                               overflowStrategy: OverflowStrategy = OverflowStrategy.backpressure,
                               delay: FiniteDuration = Duration.Zero,
@@ -108,7 +107,7 @@ object RetryBidi {
     * Creates a [[akka.stream.javadsl.BidiFlow]] that can be joined with a [[akka.stream.javadsl.Flow]] to add
     * Retry functionality with uniqueIdMapper, custom failure decider and OverflowStrategy.
     */
-  def create[In, Out, Context](maxRetries: Long, uniqueIdMapper: JFunction[Context, Optional[Any]],
+  def create[In, Out, Context](maxRetries: Integer, uniqueIdMapper: JFunction[Context, Optional[Any]],
                                failureDecider: Optional[JFunction[Try[Out], JBoolean]],
                                overflowStrategy: OverflowStrategy):
   javadsl.BidiFlow[Pair[In, Context], Pair[In, Context], Pair[Try[Out], Context], Pair[Try[Out], Context], NotUsed] =
@@ -122,7 +121,7 @@ object RetryBidi {
     * Java API
     * @see above for details about each parameter
     */
-  def create[In, Out, Context](maxRetries: Long,
+  def create[In, Out, Context](maxRetries: Integer,
                                failureDecider: Optional[JFunction[Try[Out], JBoolean]],
                                overflowStrategy: OverflowStrategy):
   javadsl.BidiFlow[Pair[In, Context], Pair[In, Context], Pair[Try[Out], Context], Pair[Try[Out], Context], NotUsed] =
@@ -135,7 +134,7 @@ object RetryBidi {
     * Java API
     * @see above for details about each parameter.
     */
-  def create[In, Out, Context](maxRetries: Long, uniqueIdMapper: JFunction[Context, Optional[Any]],
+  def create[In, Out, Context](maxRetries: Integer, uniqueIdMapper: JFunction[Context, Optional[Any]],
                                overflowStrategy: OverflowStrategy):
   javadsl.BidiFlow[Pair[In, Context], Pair[In, Context], Pair[Try[Out], Context], Pair[Try[Out], Context], NotUsed] =
     JavaConverters.toJava(apply[In, Out, Context](
@@ -147,7 +146,7 @@ object RetryBidi {
     * Java API
     * @see above for details about each parameter.
     */
-  def create[In, Out, Context](maxRetries: Long):
+  def create[In, Out, Context](maxRetries: Integer):
   javadsl.BidiFlow[Pair[In, Context], Pair[In, Context], Pair[Try[Out], Context], Pair[Try[Out], Context], NotUsed] =
     JavaConverters.toJava(apply[In, Out, Context](maxRetries = maxRetries))
 
@@ -195,7 +194,7 @@ object RetryBidi {
   *             This then gets wrapped with a [[Try]] and pushed downstream with a [[Context]]
   * @tparam Context the type of the context that is carried around along with the elements.
   */
-final class RetryBidi[In, Out, Context] private[streams](maxRetries: Long, uniqueIdMapper: Context => Option[Any],
+final class RetryBidi[In, Out, Context] private[streams](maxRetries: Int, uniqueIdMapper: Context => Option[Any],
                                                          failureDecider: Option[Try[Out] => Boolean] = None,
                                                          overflowStrategy: OverflowStrategy = OverflowStrategy.backpressure,
                                                          delay: FiniteDuration = Duration.Zero,
@@ -237,43 +236,19 @@ final class RetryBidi[In, Out, Context] private[streams](maxRetries: Long, uniqu
         case Some(InputBuffer(_, max)) => max
       }
 
-    case class RetryTracker(ctx: Context, count: Long, lastFailureTime: Long) extends Delayed {
-      override def getDelay(unit: TimeUnit): Long = {
-        if (noDelay) 0
-        else {
-          val elapsedNanos = System.nanoTime() - lastFailureTime
-          unit.convert(computeSleepTime(count) - elapsedNanos, NANOSECONDS)
-        }
-      }
-
-      override def compareTo(o: Delayed): Int =
-        if (noDelay) 0 else if (getDelay(TimeUnit.NANOSECONDS) < o.getDelay(TimeUnit.NANOSECONDS)) -1 else +1
+    case class RetryTracker(ctx: Context, count: Long, nextRetryTime: Long)
+    class RetryComparator() extends Comparator[RetryTracker] {
+      // Note: this comparator imposes orderings that is inconsistent with equals.
+      override def compare(r1: RetryTracker, r2: RetryTracker): Int =
+        (r1.nextRetryTime - r2.nextRetryTime).toInt
     }
-    private val retryDelayQ = new DelayQueue[RetryTracker]()
+    // Ordered from shorter retry sleep time to long retry sleep time
+    private val retryQ = new PriorityQueue[RetryTracker](new RetryComparator())
 
     // A map of all the in flight (including failed) in elements (bounded by size)
     private val retryRegistry = mutable.LinkedHashMap.empty[Any, (In, Context, RetryTracker)]
     private val noDelay = delay == Duration.Zero
     private var upstreamFinished = false
-
-    private def queueFailure(context: Context): Boolean =
-      retryRegistry.get(uniqueId(context)) match {
-        case None =>
-          log.debug("Element for context [{}] dropped", context)
-          false
-        case Some((_, ctx, retryTracker)) if retryTracker.count >= maxRetries =>
-          log.debug("Retries exhausted for context [{}]", context)
-          retryRegistry.get(uniqueId(ctx)) foreach(entry => {
-            retryDelayQ.remove(entry._3)
-            retryRegistry -= uniqueId(entry._2)
-          })
-          false
-        case Some((_, ctx, retryTracker)) =>
-          log.debug("Queueing retry {} for context [{}]", retryTracker.count + 1, context)
-          updateTracker(ctx).foreach(tracker => retryDelayQ.add(tracker))
-          if (!isTimerActive(timerName) && !noDelay) scheduleOnce(timerName, sleepTimeLeft)
-          true
-      }
 
     // Some useful hidden types for pattern match
     private val backPressure = OverflowStrategy.backpressure
@@ -285,22 +260,22 @@ final class RetryBidi[In, Out, Context] private[streams](maxRetries: Long, uniqu
 
     private def handleBufferFull(): Unit = overflowStrategy match {
       case `dropHead` =>
-        val head = retryRegistry.head
-        retryDelayQ.remove(head._2._3)
-        retryRegistry -= head._1 // build a Buffer for squbs
+        val (key, (_, _, retryTracker)) = retryRegistry.head
+        retryQ.remove(retryTracker)
+        retryRegistry -= key // build a Buffer for squbs
         log.debug("Buffer full dropping head")
         grabAndPush()
       case `dropNew` =>
         grab(in1)
         log.debug("Buffer full dropping newest")
       case `dropTail` =>
-        val tail = retryRegistry.last
-        retryDelayQ.remove(tail._2._3)
-        retryRegistry -= tail._1
+        val (key, (_, _, retryTracker)) = retryRegistry.last
+        retryQ.remove(retryTracker)
+        retryRegistry -= key
         log.debug("Buffer full dropping last")
         grabAndPush()
       case `dropBuffer` =>
-        retryDelayQ.clear()
+        retryQ.clear()
         retryRegistry.clear()
         log.debug("Buffer full dropping buffer")
         grabAndPush()
@@ -318,25 +293,10 @@ final class RetryBidi[In, Out, Context] private[streams](maxRetries: Long, uniqu
       val (elem, ctx) = grab(in1)
       val tracker = RetryTracker(ctx, 0, System.nanoTime())
       retryRegistry.put(uniqueId(ctx), (elem, ctx, tracker))
-      log.debug("1st attempt for context [{}] ", tracker.ctx) // refactor
       push(out1, (elem, ctx))
     }
 
-    def readyOption(): Option[(In, Context)] =
-      Option(retryDelayQ.poll()) flatMap (retryTracker => {
-        retryRegistry.get(uniqueId(retryTracker.ctx))
-      }) match {
-        case Some(e) => Some(e._1, e._2)
-        case None => None
-      }
-
-    def pushIfReady(): Unit =
-      readyOption() match {
-        case Some(elemWithContext) =>
-          log.debug("Retrying context {} ", elemWithContext._2)
-          push(out1, (elemWithContext._1, elemWithContext._2))
-        case None =>
-      }
+    def isPeekReady: Boolean = noDelay || retryQ.peek().nextRetryTime <= System.nanoTime()
 
     setHandler(in1, new InHandler {
       override def onPush(): Unit = {
@@ -356,14 +316,19 @@ final class RetryBidi[In, Out, Context] private[streams](maxRetries: Long, uniqu
 
     setHandler(out1, new OutHandler {
       override def onPull(): Unit = {
-        readyOption() match {
-          case Some(elemWithCtx) =>
-            push(out1, elemWithCtx)
-          case None =>
-            if (isAvailable(in1)) {
-              if (isBufferFull) handleBufferFull()
-              else grabAndPush()
-            } else if (pullCondition && !upstreamFinished && !hasBeenPulled(in1)) pull(in1)
+        if(!retryQ.isEmpty && isPeekReady) {
+          val (elem, ctx, _) = retryRegistry(uniqueId(retryQ.poll().ctx))
+          push(out1, (elem, ctx))
+          // If a timer is active, we do not need it until the next onPull.  A timer may be active because of precision.
+          cancelTimer(timerName)
+        } else {
+          if(!retryQ.isEmpty && !isTimerActive(timerName)) scheduleOnce(timerName, remainingDelay)
+
+          // TODO Check this logic again.  If retryQ is not empty, should we send a demand to upstream.  Needs discussion.
+          if (isAvailable(in1)) {
+            if (isBufferFull) handleBufferFull() // TODO this would introduce issues..
+            else grabAndPush()
+          } else if (pullCondition && !upstreamFinished && !hasBeenPulled(in1)) pull(in1)
         }
       }
 
@@ -377,26 +342,42 @@ final class RetryBidi[In, Out, Context] private[streams](maxRetries: Long, uniqu
     setHandler(in2, new InHandler {
       override def onPush(): Unit = {
         val (elem, context) = grab(in2)
+        val registryKey = uniqueId(context)
+        val (_, _, retryTracker) = retryRegistry(registryKey)
+
         if (isFailure(elem)) {
-          if (queueFailure(context)) {
-            if (isAvailable(out1)) pushIfReady()
+          if (retryTracker.count >= maxRetries) {
+            retryRegistry -= registryKey
+
+            if (isAvailable(out2)) push(out2, (elem, context))
+            else {
+              // This branch should never get executed unless there is a bug.
+              log.error("out2 is not available for push.  Dropping exhausted element")
+            }
+          } else {
+            updateTracker(context)
+
+            if (isAvailable(out1) && isPeekReady) {
+              val (elem, ctx, _) = retryRegistry(uniqueId(retryQ.poll().ctx))
+              push(out1, (elem, ctx))
+              // If a timer is active, it is for the element which we just pushed, so not valid anymore.
+              // Also, we do not need a timer until a demand from out1 comes with onPull.
+              cancelTimer(timerName)
+            } else if (!noDelay && !isTimerActive(timerName)) scheduleOnce(timerName, remainingDelay)
             // continue propagating demand on in2 if grabbed element is queued for retry
             pull(in2)
-          } else {
-            if (isAvailable(out2)) push(out2, (elem, context))
-            else log.error("out2 is not available for push.  Dropping exhausted element")
           }
         } else {
-          retryRegistry.get(uniqueId(context)) foreach(entry => {
-            retryDelayQ.remove(entry._3)
-            retryRegistry.remove(uniqueId(entry._2))
-          })
+          retryRegistry.remove(registryKey)
           if (isAvailable(out2)) push(out2, (elem, context))
-          else log.error("out2 is not available for push.  Dropping successful element")
+          else {
+            // This branch should never get executed unless there is a bug.
+            log.error("out2 is not available for push.  Dropping successful element")
+          }
         }
       }
 
-      override def onUpstreamFailure(ex: Throwable): Unit = if (retryDelayQ.isEmpty) fail(out2, ex)
+      override def onUpstreamFailure(ex: Throwable): Unit = if (retryQ.isEmpty) fail(out2, ex)
     })
 
     setHandler(out2, new OutHandler {
@@ -412,29 +393,34 @@ final class RetryBidi[In, Out, Context] private[streams](maxRetries: Long, uniqu
     })
 
     final override def onTimer(key: Any): Unit = {
-      if (isAvailable(out1)) pushIfReady()
-      if (!retryDelayQ.isEmpty) scheduleOnce(timerName, sleepTimeLeft)
+      if (isAvailable(out1)) {
+        Option(retryQ.poll()).foreach { retryTracker =>
+          val (elem, ctx, _) = retryRegistry(uniqueId(retryTracker.ctx))
+          push(out1, (elem, ctx))
+        }
+      }
     }
 
-    private def updateTracker(context: Context): Option[RetryTracker] =
+    // update tracker in retryRegistry and add to retryQ
+    private def updateTracker(context: Context) =
       retryRegistry.get(uniqueId(context)) match {
         case Some((elem, ctx, retryTracker)) =>
-          val newTracker = RetryTracker(ctx, retryTracker.count + 1, System.nanoTime())
+          val retry = retryTracker.count + 1
+          val newTracker =
+            if (noDelay) RetryTracker(ctx, retry, System.nanoTime)
+            else RetryTracker(ctx, retry, System.nanoTime + delayTime(retry))
+
           retryRegistry += ((uniqueId(ctx), (elem, ctx, newTracker)))
-          Some(newTracker)
-        case None => None
+          val prevHead = Option(retryQ.peek())
+          retryQ.add(newTracker)
+          if (retryQ.peek().equals(newTracker) && prevHead.nonEmpty)
+            if (prevHead.get.nextRetryTime - newTracker.nextRetryTime >= precisionAsNanos) cancelTimer(timerName)
+        case None =>
       }
 
-    private def sleepTimeLeft: FiniteDuration = {
-      Option(retryDelayQ.peek()) match {
-        case Some(retryTracker) =>
-          val elapsedTime = System.nanoTime() - retryTracker.lastFailureTime
-          FiniteDuration(math.max(computeSleepTime(retryTracker.count) - elapsedTime, delayAsNanos), NANOSECONDS)
-        case None => FiniteDuration(delayAsNanos, NANOSECONDS)
-      }
-    }
+    private def remainingDelay = FiniteDuration(retryQ.peek().nextRetryTime - System.nanoTime(), NANOSECONDS)
 
-    private def computeSleepTime(retry: Long): Long = {
+    private def delayTime(retry: Long): Long = {
       // each retry delay will be delay duration * { backoff factor }
       // backoffFactor is (N ^ expbackOffFactor ) up to maxdelay (if one is specified)
       // E.g with a delay duration of 200ms and exponentialbackoff of 1.5
@@ -485,13 +471,13 @@ final class RetryBidi[In, Out, Context] private[streams](maxRetries: Long, uniqu
   * @return a [[RetrySettings]] with specified values
   */
 case class RetrySettings[In, Out, Context] private[streams](
-   maxRetries: Long,
-   uniqueIdMapper: Context => Option[Any] = (_: Any) => None,
-   failureDecider: Option[Try[Out] => Boolean] = None,
-   overflowStrategy: OverflowStrategy = OverflowStrategy.backpressure,
-   delay: FiniteDuration = Duration.Zero,
-   exponentialBackoffFactor: Double = 0.0,
-   maxDelay: FiniteDuration = Duration.Zero) {
+                                                             maxRetries: Int,
+                                                             uniqueIdMapper: Context => Option[Any] = (_: Any) => None,
+                                                             failureDecider: Option[Try[Out] => Boolean] = None,
+                                                             overflowStrategy: OverflowStrategy = OverflowStrategy.backpressure,
+                                                             delay: FiniteDuration = Duration.Zero,
+                                                             exponentialBackoffFactor: Double = 0.0,
+                                                             maxDelay: FiniteDuration = Duration.Zero) {
 
   def withUniqueIdMapper(uniqueIdMapper: Context => Option[Any]): RetrySettings[In, Out, Context] =
     copy(uniqueIdMapper = uniqueIdMapper)
@@ -511,14 +497,12 @@ case class RetrySettings[In, Out, Context] private[streams](
   def withMaxDelay(maxDelay: FiniteDuration): RetrySettings[In, Out, Context] =
     copy(maxDelay = maxDelay)
 
-  import scala.compat.java8.OptionConverters._
-
   // Java API
   def withUniqueIdMapper(uniqueIdMapper: JFunction[Context, Optional[Any]]): RetrySettings[In, Out, Context] =
     copy(uniqueIdMapper = UniqueId.javaUniqueIdMapperAsScala(uniqueIdMapper))
 
-  def withFailureDecider(failureDecider: Optional[JFunction[Try[Out], JBoolean]]): RetrySettings[In, Out, Context] =
-    copy(failureDecider = failureDecider.asScala.map(f => (out: Try[Out]) => f(out).asInstanceOf[Boolean]))
+  def withFailureDecider(failureDecider: JFunction[Try[Out], JBoolean]): RetrySettings[In, Out, Context] =
+    copy(failureDecider = Some((out: Try[Out]) => failureDecider(out).asInstanceOf[Boolean]))
 }
 
 object RetrySettings {
@@ -531,7 +515,7 @@ object RetrySettings {
     * @tparam Context the context type in [[RetryBidi]]
     * @return a [[RetrySettings]] with default values
     */
-  def apply[In, Out, Context](maxRetries: Long): RetrySettings[In, Out, Context] =
+  def apply[In, Out, Context](maxRetries: Int): RetrySettings[In, Out, Context] =
     new RetrySettings[In, Out, Context](maxRetries)
 
   /**
@@ -544,7 +528,7 @@ object RetrySettings {
     * @tparam Context the carried content in [[org.squbs.streams.RetryBidi]]
     * @return a [[RetrySettings]] with default values
     */
-  def create[In, Out, Context](maxRetries: JLong): RetrySettings[In, Out, Context] =
+  def create[In, Out, Context](maxRetries: Integer): RetrySettings[In, Out, Context] =
     RetrySettings[In, Out, Context](maxRetries)
 
 }
