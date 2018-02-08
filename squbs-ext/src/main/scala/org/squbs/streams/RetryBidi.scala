@@ -27,7 +27,6 @@ import akka.stream.Attributes.InputBuffer
 import akka.stream.scaladsl.{BidiFlow, Flow}
 import akka.stream.stage._
 import akka.stream._
-import akka.stream.OverflowStrategy._
 
 import scala.concurrent.duration._
 import scala.collection.mutable
@@ -64,7 +63,6 @@ object RetryBidi {
     * @param uniqueIdMapper the function that maps [[Context]] to a unique id
     * @param failureDecider function to determine if an element passed by the joined [[Flow]] is
     *                       actually a failure or not
-    * @param overflowStrategy the overflowStrategy to use on Retry buffer filling
     * @param delay            the delay duration between retrying each failed retry
     * @param exponentialBackoffFactor exponential factor the delay duration will be increased upon each retry
     * @param maxDelay the maximum delay duration during retry backoff
@@ -75,12 +73,11 @@ object RetryBidi {
     */
   def apply[In, Out, Context](maxRetries: Int, uniqueIdMapper: Context => Option[Any] = (_: Any) => None,
                               failureDecider: Option[Try[Out] => Boolean] = None,
-                              overflowStrategy: OverflowStrategy = OverflowStrategy.backpressure,
                               delay: FiniteDuration = Duration.Zero,
                               exponentialBackoffFactor: Double = 1.0,
                               maxDelay: FiniteDuration = Duration.Zero):
   BidiFlow[(In, Context), (In, Context), (Try[Out], Context), (Try[Out], Context), NotUsed] =
-    BidiFlow.fromGraph(new RetryBidi[In, Out, Context](maxRetries, uniqueIdMapper, failureDecider, overflowStrategy,
+    BidiFlow.fromGraph(new RetryBidi[In, Out, Context](maxRetries, uniqueIdMapper, failureDecider,
       delay, exponentialBackoffFactor, maxDelay))
 
   /**
@@ -96,7 +93,6 @@ object RetryBidi {
       maxRetries = retrySettings.maxRetries,
       uniqueIdMapper = retrySettings.uniqueIdMapper,
       failureDecider = retrySettings.failureDecider,
-      overflowStrategy = retrySettings.overflowStrategy,
       delay = retrySettings.delay,
       exponentialBackoffFactor = retrySettings.exponentialBackoffFactor,
       maxDelay = retrySettings.maxDelay))
@@ -105,42 +101,36 @@ object RetryBidi {
   /**
     * Java API
     * Creates a [[akka.stream.javadsl.BidiFlow]] that can be joined with a [[akka.stream.javadsl.Flow]] to add
-    * Retry functionality with uniqueIdMapper, custom failure decider and OverflowStrategy.
+    * Retry functionality with uniqueIdMapper and custom failure decider
     */
   def create[In, Out, Context](maxRetries: Integer, uniqueIdMapper: JFunction[Context, Optional[Any]],
-                               failureDecider: Optional[JFunction[Try[Out], JBoolean]],
-                               overflowStrategy: OverflowStrategy):
+                               failureDecider: Optional[JFunction[Try[Out], JBoolean]]):
   javadsl.BidiFlow[Pair[In, Context], Pair[In, Context], Pair[Try[Out], Context], Pair[Try[Out], Context], NotUsed] =
     JavaConverters.toJava(apply[In, Out, Context](new RetrySettings[In, Out, Context](
       maxRetries = maxRetries,
       uniqueIdMapper = UniqueId.javaUniqueIdMapperAsScala(uniqueIdMapper),
-      failureDecider = failureDecider.asScala.map(f => (out: Try[Out]) => f(out)),
-      overflowStrategy = overflowStrategy)))
+      failureDecider = failureDecider.asScala.map(f => (out: Try[Out]) => f(out)))))
 
   /**
     * Java API
     * @see above for details about each parameter
     */
   def create[In, Out, Context](maxRetries: Integer,
-                               failureDecider: Optional[JFunction[Try[Out], JBoolean]],
-                               overflowStrategy: OverflowStrategy):
+                               failureDecider: Optional[JFunction[Try[Out], JBoolean]]):
   javadsl.BidiFlow[Pair[In, Context], Pair[In, Context], Pair[Try[Out], Context], Pair[Try[Out], Context], NotUsed] =
     JavaConverters.toJava(apply[In, Out, Context](new RetrySettings[In, Out, Context](
       maxRetries = maxRetries,
-      failureDecider = failureDecider.asScala.map(f => (out: Try[Out]) => f(out)),
-      overflowStrategy = overflowStrategy)))
+      failureDecider = failureDecider.asScala.map(f => (out: Try[Out]) => f(out)))))
 
   /**
     * Java API
     * @see above for details about each parameter.
     */
-  def create[In, Out, Context](maxRetries: Integer, uniqueIdMapper: JFunction[Context, Optional[Any]],
-                               overflowStrategy: OverflowStrategy):
+  def create[In, Out, Context](maxRetries: Integer, uniqueIdMapper: JFunction[Context, Optional[Any]]):
   javadsl.BidiFlow[Pair[In, Context], Pair[In, Context], Pair[Try[Out], Context], Pair[Try[Out], Context], NotUsed] =
     JavaConverters.toJava(apply[In, Out, Context](
       maxRetries = maxRetries,
-      uniqueIdMapper = UniqueId.javaUniqueIdMapperAsScala(uniqueIdMapper),
-      overflowStrategy = overflowStrategy))
+      uniqueIdMapper = UniqueId.javaUniqueIdMapperAsScala(uniqueIdMapper)))
 
   /**
     * Java API
@@ -184,7 +174,6 @@ object RetryBidi {
   * @param uniqueIdMapper function that maps a [[Context]] to a unique value per element
   * @param failureDecider function that gets called to determine if an element passed by the joined [[Flow]] is a
   *                       failure
-  * @param overflowStrategy the overflowStrategy to use on Retry buffer filling
   * @param delay the delay duration to wait between each retry.  Defaults to 0 nanos (no delay)
   * @param exponentialBackoffFactor The exponential backoff factor that the delay duration will be increased on each
   *                                 retry
@@ -196,7 +185,6 @@ object RetryBidi {
   */
 final class RetryBidi[In, Out, Context] private[streams](maxRetries: Int, uniqueIdMapper: Context => Option[Any],
                                                          failureDecider: Option[Try[Out] => Boolean] = None,
-                                                         overflowStrategy: OverflowStrategy = OverflowStrategy.backpressure,
                                                          delay: FiniteDuration = Duration.Zero,
                                                          exponentialBackoffFactor: Double = 1.0,
                                                          maxDelay: FiniteDuration = Duration.Zero)
@@ -254,43 +242,7 @@ final class RetryBidi[In, Out, Context] private[streams](maxRetries: Int, unique
     private val noDelay = delay == Duration.Zero
     private var upstreamFinished = false
 
-    // Some useful hidden types for pattern match
-    private val backPressure = OverflowStrategy.backpressure
-    private val dropBuffer = OverflowStrategy.dropBuffer
-    private val dropHead = OverflowStrategy.dropHead
-    private val dropNew = OverflowStrategy.dropNew
-    private val dropTail = OverflowStrategy.dropTail
-    private val fail = OverflowStrategy.fail
-
-    private def handleBufferFull(): Unit = overflowStrategy match {
-      case `dropHead` =>
-        val (key, (_, _, retryTracker)) = retryRegistry.head
-        retryQ.remove(retryTracker)
-        retryRegistry -= key // build a Buffer for squbs
-        log.debug("Buffer full dropping head")
-        grabAndPush()
-      case `dropNew` =>
-        grab(in1)
-        log.debug("Buffer full dropping newest")
-      case `dropTail` =>
-        val (key, (_, _, retryTracker)) = retryRegistry.last
-        retryQ.remove(retryTracker)
-        retryRegistry -= key
-        log.debug("Buffer full dropping last")
-        grabAndPush()
-      case `dropBuffer` =>
-        retryQ.clear()
-        retryRegistry.clear()
-        log.debug("Buffer full dropping buffer")
-        grabAndPush()
-      case `fail` =>
-        failStage(BufferOverflowException(s"Buffer overflow for Retry stage (max capacity was: $internalBufferSize)!"))
-      case `backPressure` => // NOP.  Don't grab any elements from upstream in backpressure mode when full
-      case _ ⇒
-        throw new IllegalStateException("Retry buffer overflow mode not supported")
-    }
-
-    private def pullCondition = overflowStrategy != backpressure || retryRegistry.size < internalBufferSize
+    private def pullCondition = retryRegistry.size < internalBufferSize
     private def isBufferFull = retryRegistry.size >= internalBufferSize
 
     def grabAndPush(): Unit = {
@@ -303,12 +255,7 @@ final class RetryBidi[In, Out, Context] private[streams](maxRetries: Int, unique
     def isPeekReady: Boolean = noDelay || retryQ.peek().nextRetryTime <= System.nanoTime()
 
     setHandler(in1, new InHandler {
-      override def onPush(): Unit = {
-        if (isAvailable(out1)) {
-          if (isBufferFull) handleBufferFull()
-          else grabAndPush()
-        }
-      }
+      override def onPush(): Unit = if (isAvailable(out1) && !isBufferFull) grabAndPush()
 
       override def onUpstreamFinish(): Unit = {
         if (retryRegistry.isEmpty) completeStage()
@@ -329,10 +276,8 @@ final class RetryBidi[In, Out, Context] private[streams](maxRetries: Int, unique
           if(!retryQ.isEmpty && !isTimerActive(timerName)) scheduleOnce(timerName, remainingDelay)
 
           // TODO Check this logic again.  If retryQ is not empty, should we send a demand to upstream.  Needs discussion.
-          if (isAvailable(in1)) {
-            if (isBufferFull) handleBufferFull() // TODO this would introduce issues..
-            else grabAndPush()
-          } else if (pullCondition && !upstreamFinished && !hasBeenPulled(in1)) pull(in1)
+          if (isAvailable(in1) && !isBufferFull) grabAndPush()
+          else if (pullCondition && !upstreamFinished && !hasBeenPulled(in1)) pull(in1)
         }
       }
 
@@ -471,7 +416,6 @@ final class RetryBidi[In, Out, Context] private[streams](maxRetries: Int, unique
   * @param uniqueIdMapper function that maps [[Context]] to a unique id
   * @param failureDecider function to determine if an element passed by the joined [[Flow]] is
   *                       actually a failure or not
-  * @param overflowStrategy overflowStrategy to use on Retry buffer filling
   * @param delay            to delay between retrying each failed element.
   * @param exponentialBackoffFactor exponential amount the delay duration will be increased upon each retry
   * @param maxDelay maximum delay duration for retry.
@@ -484,7 +428,6 @@ case class RetrySettings[In, Out, Context] private[streams](
                                                              maxRetries: Int,
                                                              uniqueIdMapper: Context => Option[Any] = (_: Any) => None,
                                                              failureDecider: Option[Try[Out] => Boolean] = None,
-                                                             overflowStrategy: OverflowStrategy = OverflowStrategy.backpressure,
                                                              delay: FiniteDuration = Duration.Zero,
                                                              exponentialBackoffFactor: Double = 0.0,
                                                              maxDelay: FiniteDuration = Duration.Zero) {
@@ -494,9 +437,6 @@ case class RetrySettings[In, Out, Context] private[streams](
 
   def withFailureDecider(failureDecider: Try[Out] => Boolean): RetrySettings[In, Out, Context] =
     copy(failureDecider = Some(failureDecider))
-
-  def withOverflowStrategy(overflowStrategy: OverflowStrategy): RetrySettings[In, Out, Context] =
-    copy(overflowStrategy = overflowStrategy)
 
   def withDelay(delay: FiniteDuration): RetrySettings[In, Out, Context] =
     copy(delay = delay)

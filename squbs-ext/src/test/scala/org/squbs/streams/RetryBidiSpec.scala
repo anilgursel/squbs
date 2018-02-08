@@ -21,11 +21,11 @@ import java.util.concurrent.atomic.AtomicLong
 import akka.NotUsed
 import akka.actor.ActorSystem
 import akka.stream.Attributes.inputBuffer
-import akka.stream.{ActorMaterializer, BufferOverflowException, OverflowStrategy, ThrottleMode}
+import akka.stream.{ActorMaterializer, OverflowStrategy, ThrottleMode}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.stream.testkit.scaladsl.{TestSink, TestSource}
 import akka.testkit.TestKit
-import org.scalatest.{AsyncFlatSpecLike, FlatSpecLike, Matchers}
+import org.scalatest.{AsyncFlatSpecLike, Matchers}
 
 import scala.concurrent.duration._
 import scala.language.postfixOps
@@ -44,10 +44,6 @@ class RetryBidiSpec extends TestKit(ActorSystem("RetryBidiSpec")) with AsyncFlat
   it should "require expbackoff >= 0" in {
     an[IllegalArgumentException] should be thrownBy
       RetryBidi[String, String, NotUsed](1, exponentialBackoffFactor = -0.5)
-  }
-
-  it should "retry settings use backpressure overflow strategy by default" in {
-    assert(RetrySettings(1).overflowStrategy.equals(OverflowStrategy.backpressure))
   }
 
   it should "retry settings failure decider should default to None" in {
@@ -328,87 +324,6 @@ class RetryBidiSpec extends TestKit(ActorSystem("RetryBidiSpec")) with AsyncFlat
     succeed
   }
 
-  it should "drop head elements and emit them when dropHead buffer mode" in {
-    val bottom = Flow[(String, Long)].delay(10.millis).map {
-      case (_, ctx) => (failure, ctx)
-    }
-    val retry = RetryBidi[String, String, Long](10, overflowStrategy = OverflowStrategy.dropHead)
-      .withAttributes(inputBuffer(initial = 1, max = 3))
-
-    val sink = Source(1 to 5)
-      .map(x => (x.toString, x.toLong))
-      .via(retry.join(bottom))
-      .runWith(TestSink.probe)
-
-    // 1 and 2 element are emitted after being dropped from buffer, 3-5 after exhausting all retries
-    sink
-      .request(5)
-      .expectNoMsg(10.millis)
-      .expectNext((failure, 1L), (failure, 2L))
-      .expectNoMsg(100.millis)
-      .expectNext((failure, 3L), (failure, 4L), (failure, 5L))
-    succeed
-  }
-
-  it should "drop tail elements and emit them when dropTail buffer mode" in {
-    val bottom = Flow[(String, Long)].delay(10.millis).map {
-      case (_, ctx) => (failure, ctx)
-    }
-    val retry = RetryBidi[String, String, Long](10, overflowStrategy = OverflowStrategy.dropTail)
-      .withAttributes(inputBuffer(initial = 1, max = 3))
-
-    val sink = Source(1 to 5)
-      .map(x => (x.toString, x.toLong))
-      .via(retry.join(bottom))
-      .runWith(TestSink.probe)
-
-    // element 3 and 4 are emitted after being dropped from buffer
-    sink.request(5)
-      .expectNoMsg(10.millis)
-      .expectNext((failure, 3L), (failure, 4L))
-      .expectNoMsg(100.millis)
-      .expectNext((failure, 1L), (failure, 2L), (failure, 5L))
-    succeed
-  }
-
-  it should "drop new elements when dropNew buffer mode" in {
-    val bottom = Flow[(String, Long)].delay(10.millis).map {
-      case (_, ctx) => (failure, ctx)
-    }
-    val retry = RetryBidi[String, String, Long](2, overflowStrategy = OverflowStrategy.dropNew)
-      .withAttributes(inputBuffer(initial = 1, max = 3))
-
-    val sink = Source(1 to 5)
-      .map(x => (x.toString, x.toLong))
-      .via(retry.join(bottom))
-      .runWith(TestSink.probe)
-
-    sink.request(5)
-      .expectNext((failure, 1L), (failure, 2L), (failure, 3L))
-      .expectComplete() // element 4 and 5 are dropped on buffer full
-    succeed
-  }
-
-  it should "drop all elements in buffer when dropBuffer mode" in {
-    val bottom = Flow[(String, Long)].delay(10.millis).map {
-      case (_, ctx) => (failure, ctx)
-    }
-    val retry = RetryBidi[String, String, Long](10, overflowStrategy = OverflowStrategy.dropBuffer)
-      .withAttributes(inputBuffer(initial = 1, max = 4))
-
-    val sink = Source(1 to 8)
-      .map(x => (x.toString, x.toLong))
-      .via(retry.join(bottom))
-      .runWith(TestSink.probe)
-
-    sink.request(8) // first 16 elements are dropped and immitted when buffer is full the rest after exhausting retries
-      .expectNoMsg(10.millis)
-      .expectNext((failure, 1L), (failure, 2L), (failure, 3L), (failure, 4L))
-      .expectNoMsg(100.millis)
-      .expectNext((failure, 5L), (failure, 6L), (failure, 7L), (failure, 8L))
-    succeed
-  }
-
   it should "backpressures upstream when buffer full" in {
     val bottom = Flow[(String, Long)].delay(10.millis).map {
       case (_, ctx) => (failure, ctx)
@@ -424,22 +339,6 @@ class RetryBidiSpec extends TestKit(ActorSystem("RetryBidiSpec")) with AsyncFlat
       .expectNoMsg(10.millis)
       .expectNext((failure, 1L))
       .expectNoMsg(10.millis)
-    succeed
-  }
-
-  it should "fail when buffer full on fail mode" in {
-    val bottom = Flow[(String, Long)].delay(10.millis).map {
-      case (_, ctx) => (failure, ctx)
-    }
-    val retry = RetryBidi[String, String, Long](1, overflowStrategy = OverflowStrategy.fail)
-      .withAttributes(inputBuffer(initial = 1, max = 1))
-
-    val sink = Source(1 to 3)
-      .map(x => (x.toString, x.toLong))
-      .via(retry.join(bottom))
-      .runWith(TestSink.probe)
-
-    sink.request(3).expectError(BufferOverflowException("Buffer overflow for Retry stage (max capacity was: 1)!"))
     succeed
   }
 
@@ -526,7 +425,6 @@ class RetryBidiSpec extends TestKit(ActorSystem("RetryBidiSpec")) with AsyncFlat
       .withDelay(1 second)
       .withMaxDelay(5 seconds)
       .withExponentialBackoff(2)
-      .withOverflowStrategy(OverflowStrategy.backpressure)
 
     val retry = RetryBidi[String, String, Long](retrySettings)
 
