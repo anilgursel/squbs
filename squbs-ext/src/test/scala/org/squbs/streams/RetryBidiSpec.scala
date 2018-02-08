@@ -324,7 +324,7 @@ class RetryBidiSpec extends TestKit(ActorSystem("RetryBidiSpec")) with AsyncFlat
       .toMat(TestSink.probe)(Keep.both).run()
 
     source.sendNext("1").sendNext("2").sendNext("3").sendComplete()
-    sink.request(3).expectNext((Success("1"), 1L)).expectNextUnordered((failure, 2L), (failure, 3L))
+    sink.request(3).expectNext((Success("1"), 1L)).expectNextUnordered((failure, 2L), (failure, 3L)).expectComplete()
     succeed
   }
 
@@ -470,7 +470,7 @@ class RetryBidiSpec extends TestKit(ActorSystem("RetryBidiSpec")) with AsyncFlat
       .via(retry.join(bottom))
       .runWith(TestSink.probe)
 
-    testSink.request(6)
+    testSink.request(5)
       .expectNextN((Success("1"), 1L) :: (Success("3"), 3L) :: (Success("5"), 5L) :: Nil)
       .expectNoMsg(2 second) // 2 x (1s delay)
       .expectNext((failure, 2L))
@@ -479,7 +479,7 @@ class RetryBidiSpec extends TestKit(ActorSystem("RetryBidiSpec")) with AsyncFlat
     succeed
   }
 
-  it should "retry with delay and backoff should increase retry delay" in {
+  it should "increase retry delay with backoff" in {
     val bottom = Flow[(String, Long)].map {
       case (elem, ctx) => if (ctx % 2 == 0) (failure, ctx) else (Success(elem), ctx)
     }
@@ -489,9 +489,9 @@ class RetryBidiSpec extends TestKit(ActorSystem("RetryBidiSpec")) with AsyncFlat
       .via(retry.join(bottom))
       .runWith(TestSink.probe)
 
-    sink.request(6)
+    sink.request(5)
       .expectNextN((Success("1"), 1L) :: (Success("3"), 3L) :: (Success("5"), 5L) :: Nil)
-      .expectNoMsg(16 seconds) // (1s delay + 4s delay + 9s)
+      .expectNoMsg(14 seconds) // (1s delay + 4s delay + 9s)
       .expectNext((failure, 2L))
       .expectNext((failure, 4L))
       .expectComplete()
@@ -536,7 +536,7 @@ class RetryBidiSpec extends TestKit(ActorSystem("RetryBidiSpec")) with AsyncFlat
       .runWith(TestSink.probe)
 
     sink.request(5)
-      .expectNextN((Success("1"), 1L) :: (Success("3"), 3L) :: (Success("5"), 5L) :: Nil)
+      .expectNext((Success("1"), 1L), (Success("3"), 3L), (Success("5"), 5L))
       .expectNoMsg(5 seconds)
       .expectNext((failure, 2L))
       .expectNext((failure, 4L))

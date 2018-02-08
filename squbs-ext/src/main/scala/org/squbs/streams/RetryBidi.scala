@@ -239,9 +239,13 @@ final class RetryBidi[In, Out, Context] private[streams](maxRetries: Int, unique
     case class RetryTracker(ctx: Context, count: Long, nextRetryTime: Long)
     class RetryComparator() extends Comparator[RetryTracker] {
       // Note: this comparator imposes orderings that is inconsistent with equals.
-      override def compare(r1: RetryTracker, r2: RetryTracker): Int =
-        (r1.nextRetryTime - r2.nextRetryTime).toInt
+      override def compare(r1: RetryTracker, r2: RetryTracker): Int = {
+        if(r1.nextRetryTime < r2.nextRetryTime) -1
+        else if(r1.nextRetryTime == r2.nextRetryTime) 0
+        else 1
+      }
     }
+    // TODO Use Long instead of Comparator and provide an initial capacity
     // Ordered from shorter retry sleep time to long retry sleep time
     private val retryQ = new PriorityQueue[RetryTracker](new RetryComparator())
 
@@ -349,7 +353,10 @@ final class RetryBidi[In, Out, Context] private[streams](maxRetries: Int, unique
           if (retryTracker.count >= maxRetries) {
             retryRegistry -= registryKey
 
-            if (isAvailable(out2)) push(out2, (elem, context))
+            if (isAvailable(out2)) {
+              push(out2, (elem, context))
+              if (retryRegistry.isEmpty && upstreamFinished) completeStage()
+            }
             else {
               // This branch should never get executed unless there is a bug.
               log.error("out2 is not available for push.  Dropping exhausted element")
@@ -369,7 +376,10 @@ final class RetryBidi[In, Out, Context] private[streams](maxRetries: Int, unique
           }
         } else {
           retryRegistry.remove(registryKey)
-          if (isAvailable(out2)) push(out2, (elem, context))
+          if (isAvailable(out2)) {
+            push(out2, (elem, context))
+            if (retryRegistry.isEmpty && upstreamFinished) completeStage()
+          }
           else {
             // This branch should never get executed unless there is a bug.
             log.error("out2 is not available for push.  Dropping successful element")
